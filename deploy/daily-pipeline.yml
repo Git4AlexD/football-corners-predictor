@@ -1,0 +1,81 @@
+# Daily pipeline, run from a PRIVATE data repository.
+#
+# The private repository holds the contents of data/ (the odds history,
+# results, model and decision log) plus this file at
+# .github/workflows/daily-pipeline.yml. Each run checks out that data and this
+# public code repository, runs the pipeline, and commits the updated data back,
+# so the data, the API key and the run logs never appear in the public repo.
+#
+# Setup: add the API key as the repository secret API_FOOTBALL_KEY. The code
+# repository is assumed to be <owner>/football-corners-predictor; change
+# CODE_REPOSITORY below if yours is named differently.
+
+name: Daily pipeline
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC: 8am UK time in winter, 9am in summer
+  workflow_dispatch: # allows a manual run from the Actions tab
+
+permissions:
+  contents: write # to commit the updated data back to this repository
+
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
+env:
+  CODE_REPOSITORY: ${{ github.repository_owner }}/football-corners-predictor
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the stored data
+        uses: actions/checkout@v4
+        with:
+          path: data
+
+      - name: Check out the code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CODE_REPOSITORY }}
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt
+
+      - name: Point the code at the stored data
+        run: ln -s "$GITHUB_WORKSPACE/data" app/data
+
+      - name: Run the pipeline
+        working-directory: app
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: python -m corners run
+
+      # Runs even if the pipeline failed part-way, so captured odds are never lost.
+      - name: Save the updated data
+        if: always()
+        working-directory: data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Daily run $(date -u +%F)"
+          git push
+
+      - name: Keep the charts and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: app/results
+          retention-days: 30

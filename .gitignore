@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+
+# Generated data, results and logs. Odds come from API-Football, whose
+# terms don't allow redistribution, so no data is committed. Anchored to the
+# root so the corners/data package itself is not ignored.
+/data/
+/results/
+/logs/
+
+# Editors
+.vscode/
+.idea/

@@ -1,0 +1,6 @@
+# .gitignore for the private data repository (copy it there as .gitignore).
+# The feature tables are rebuilt from raw_results.csv on every run, so they
+# are not stored.
+features.csv
+team_form.csv
+.pipeline.lock

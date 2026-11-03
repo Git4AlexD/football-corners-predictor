@@ -174,10 +174,16 @@ def training_data() -> pd.DataFrame:
 
 
 def fingerprint(train: pd.DataFrame) -> str:
-    """Hash of the training rows (in any order) and the model specification."""
+    """Hash of the training rows (in any order) and the model specification.
+
+    The rows are hashed as text with decimals rounded to four places. Hashing the raw
+    numbers would let the last binary digits, which differ between machines and library
+    versions, make unchanged data look changed and trigger a pointless retrain. Any real
+    change to a match (a corrected corner count, say) shifts the features by far more.
+    """
     columns = ["Date", "League", "Season", *_MODEL_COLUMNS]
-    row_hashes = np.sort(pd.util.hash_pandas_object(train[columns], index=False).to_numpy())
-    digest = hashlib.sha256(row_hashes.tobytes())
+    rows = train[columns].sort_values(columns).to_csv(index=False, float_format="%.4f")
+    digest = hashlib.sha256(rows.encode())
     digest.update(json.dumps(MODEL_SPECS, sort_keys=True).encode())
     return digest.hexdigest()[:16]
 

@@ -19,7 +19,8 @@ name: Daily pipeline
 
 on:
   schedule:
-    - cron: "0 8 * * *" # 08:00 UTC: 8am UK time in winter, 9am in summer
+    - cron: "0 8 * * *"
+      timezone: "Europe/London" # 8am UK time all year, including when the clocks change
   workflow_dispatch: # allows a manual run from the Actions tab
 
 permissions:

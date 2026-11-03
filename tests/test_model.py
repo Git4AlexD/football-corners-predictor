@@ -38,6 +38,17 @@ def test_the_fingerprint_ignores_row_order_but_not_content(trained):
     assert fingerprint(corrected) != fingerprint(train)
 
 
+def test_the_fingerprint_ignores_numerical_noise_but_not_real_changes(trained):
+    train, _, _ = season_split(complete_rows(trained.features))
+    noisy = train.copy()
+    noisy["h_roll_corners_for"] *= 1 + 1e-12  # the kind of difference between machines
+    assert fingerprint(noisy) == fingerprint(train)
+
+    shifted = train.copy()
+    shifted["h_roll_corners_for"] += 0.01  # a real change to the data
+    assert fingerprint(shifted) != fingerprint(train)
+
+
 def test_old_model_files_are_rejected(trained):
     with pytest.raises(ValueError, match="old format"):
         TrainedModel.from_params({**trained.params, "schema_version": 1})

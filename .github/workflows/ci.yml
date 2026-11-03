@@ -18,4 +18,7 @@ jobs:
       - name: Lint
         run: ruff check . && ruff format --check .
       - name: Test
-        run: pytest
+        run: pytest -v --cov=corners --cov-report=term-missing
+      - name: Coverage summary
+        if: always()
+        run: coverage report --format=markdown --fail-under=0 >> "$GITHUB_STEP_SUMMARY"

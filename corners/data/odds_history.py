@@ -82,9 +82,13 @@ def load_odds_history() -> pd.DataFrame:
         return pd.DataFrame(columns=ODDS_COLUMNS)
     df = pd.read_csv(ODDS_HISTORY_FILE)
     df = df.reindex(columns=list(dict.fromkeys([*ODDS_COLUMNS, *df.columns])))
-    df["start_datetime"] = pd.to_datetime(df["start_datetime"], utc=True)
-    for stage in STAGES:
-        df[f"{stage}_fetched_at"] = pd.to_datetime(df[f"{stage}_fetched_at"], utc=True)
+    # Fix the types of columns that can still be empty. Left alone, pandas would store
+    # an empty timestamp column at a coarser resolution and an empty bookmaker column as
+    # numbers, and then refuse the first real value written into either.
+    for column in ("start_datetime", *(f"{stage}_fetched_at" for stage in STAGES)):
+        df[column] = pd.to_datetime(df[column], utc=True).astype("datetime64[ns, UTC]")
+    for column in df.columns[df.columns.str.endswith("_best_bookmaker")]:
+        df[column] = df[column].astype(object)
     return df
 
 

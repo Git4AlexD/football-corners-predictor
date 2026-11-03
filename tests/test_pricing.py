@@ -62,3 +62,8 @@ def test_fit_market_ladder_with_two_lines_keeps_the_alpha_prior():
 
 def test_fit_market_ladder_without_prices():
     assert fit_market_ladder({8.5: (0.0, 0.0)}) == (None, None)
+
+
+def test_an_impossible_distribution_is_an_error_not_a_silent_nan():
+    with pytest.raises(ValueError, match="Invalid NB PMF"):
+        nb_pmf(float("nan"), 0.1)

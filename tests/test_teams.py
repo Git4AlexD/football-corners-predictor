@@ -60,3 +60,10 @@ def test_resolved_names_drop_off_the_unmatched_list(lookup, tmp_path, monkeypatc
     remaining = prune_resolved(lookup)
     assert remaining["unmatched_name"].tolist() == ["Arsenal"]
     assert remaining["times_seen"].tolist() == [2]
+
+
+def test_an_empty_unmatched_list_stays_empty(lookup, tmp_path, monkeypatch):
+    monkeypatch.setattr(teams, "UNMATCHED_TEAMS_FILE", tmp_path / "unmatched.csv")
+    assert teams.unmatched_teams().empty
+    assert prune_resolved(lookup).empty
+    assert not (tmp_path / "unmatched.csv").exists()

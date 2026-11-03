@@ -132,7 +132,7 @@ def _download_season(season: str, league: str) -> pd.DataFrame | None:
         return None
     try:
         df = pd.read_csv(io.StringIO(resp.text), encoding="unicode_escape")
-    except (pd.errors.ParserError, UnicodeDecodeError) as exc:
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError) as exc:
         log.warning("Could not parse %s: %s", url, exc)
         return None
     if not {"HC", "AC", "HomeTeam", "AwayTeam", "Date"}.issubset(df.columns):

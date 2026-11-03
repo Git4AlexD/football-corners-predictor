@@ -21,12 +21,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-q"
+filterwarnings = [
+    # matplotlib 3.10 with NumPy 2.5: noise from the libraries, not from this project
+    "ignore:The 'generic' unit for NumPy timedelta:DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["corners"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90  # CI fails if the tests exercise less of the code than this
 
 [tool.ruff]
 line-length = 110

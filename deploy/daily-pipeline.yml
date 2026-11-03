@@ -9,6 +9,11 @@
 # Setup: add the API key as the repository secret API_FOOTBALL_KEY. The code
 # repository is assumed to be <owner>/football-corners-predictor; change
 # CODE_REPOSITORY below if yours is named differently.
+#
+# Optional: to publish the result charts, add a fine-grained access token (Contents:
+# read and write, for the code repository only) as the secret PUBLISH_TOKEN. Each
+# run then replaces the charts on the `charts` branch of the code repository.
+# Until that secret exists the publishing step is skipped.
 
 name: Daily pipeline
 
@@ -31,6 +36,8 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      PUBLISH_ENABLED: ${{ secrets.PUBLISH_TOKEN != '' }}
     steps:
       - name: Check out the stored data
         uses: actions/checkout@v4
@@ -79,3 +86,23 @@ jobs:
           name: results
           path: app/results
           retention-days: 30
+
+      # Only a fixed list of charts is published (see corners/publish.py). They show
+      # markets, dates and pounds, with no fixtures, odds or provider data. Each run
+      # replaces the previous charts with a single new commit on the `charts` branch,
+      # so the repository doesn't accumulate a history of pictures and `main` is
+      # never touched.
+      - name: Publish the charts
+        if: always() && env.PUBLISH_ENABLED == 'true'
+        working-directory: app
+        env:
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          python -m corners charts "$GITHUB_WORKSPACE/published"
+          cd "$GITHUB_WORKSPACE/published"
+          git init -q -b charts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Charts $(date -u +%F)"
+          git push --force "https://x-access-token:${PUBLISH_TOKEN}@github.com/${CODE_REPOSITORY}.git" charts

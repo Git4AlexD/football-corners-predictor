@@ -89,7 +89,17 @@ A strategy that keeps getting better prices than the fair closing price makes mo
 
 ## Results
 
-Results aren't published here: the pipeline is still running daily, and the strategy is still being evaluated. Running it writes the results to these local files, which are not committed:
+The pipeline publishes its charts to this repository's [`charts` branch](https://github.com/Git4AlexD/football-corners-predictor/tree/charts) after every daily run, so the charts below always show the latest results. The strategy is still being evaluated. The charts contain no odds, fixtures or other provider data, and all stakes are hypothetical, sized from a notional £1,000 bankroll.
+
+![Return on stake by market](https://raw.githubusercontent.com/Git4AlexD/football-corners-predictor/charts/return_on_stake.png)
+
+Expected return on stake at closing prices (blue) against the actual return so far (orange), each with a 95% confidence interval. A market counts as profitable only when the whole blue interval is above zero. The orange intervals are much wider, which is why results alone can't settle the question yet.
+
+![Cumulative profit](https://raw.githubusercontent.com/Git4AlexD/football-corners-predictor/charts/profit_over_time.png)
+
+Running profit per market: expected at closing prices against actual. Both charts only include bets with an early and a closing price recorded. Equity curves for each market and a cash-flow chart are on the branch too.
+
+The tables behind the charts are written locally by the pipeline and are not committed:
 
 | File | Contents |
 |---|---|
@@ -109,7 +119,7 @@ Results aren't published here: the pipeline is still running daily, and the stra
 - **What was recommended vs what would be.** The back-test asks how *today's* model would have done. A separate append-only decision log records what the pipeline *actually recommended* before each kickoff, and is graded separately.
 - **Consistent team form.** Live predictions and the back-test read the same "form after each team's latest match" table, so a fixture gets identical inputs whether it is predicted before kickoff or re-evaluated afterwards. The test suite checks this equivalence.
 - **Odds history as a dataset.** Locking one early and one closing snapshot per fixture builds the dataset that makes the CLV evaluation possible. One unfiltered API request per fixture covers all four markets, a quarter of the per-market cost.
-- **Deployment.** The daily run is a scheduled GitHub Actions workflow ([`deploy/daily-pipeline.yml`](deploy/daily-pipeline.yml)) in a separate private repository that stores the data, so the API key, data and run logs never appear in this repository. Each run commits the updated data back, and the charts are kept as a downloadable artifact.
+- **Deployment.** The daily run is a scheduled GitHub Actions workflow ([`deploy/daily-pipeline.yml`](deploy/daily-pipeline.yml)) in a separate private repository that stores the data, so the API key, data and run logs never appear in this repository. Each run commits the updated data back and publishes the result charts to this repository's `charts` branch, using a token that can only write to this repository. Only a fixed list of charts is ever published ([`corners/publish.py`](corners/publish.py)).
 - **Resilience.** API rate limits are retried with back-off, and part of the daily quota is reserved for odds. Each step falls back to its last good output, so a source outage doesn't stop the run.
 - **Name matching across providers.** Token overlap with a similarity tie-break, strict fuzzy matching and an explicit alias table. Unmatched names are logged and surfaced after every run.
 - **Quality.** Type hints throughout, `logging` with a rotating log file, settings in one config module, `ruff` linting and formatting, and a `pytest` suite (unit tests plus an end-to-end test on synthetic data) run in GitHub Actions.
@@ -133,9 +143,10 @@ corners/
 ├── decision_log.py     # append-only record of live decisions
 ├── evaluation.py       # profitability measured at closing prices
 ├── plots.py            # charts
+├── publish.py          # the fixed list of charts that are safe to publish
 └── teams.py            # cross-provider team-name matching
 tests/                  # pytest: unit + end-to-end on synthetic data
-deploy/                 # scheduled workflow and .gitignore for the private data repository
+deploy/                 # scheduled workflow and git settings for the private data repository
 ```
 
 Generated files go to `data/`, `results/` and `logs/`, none of which are committed.
@@ -152,7 +163,8 @@ python -m corners run              # full daily pipeline (also the default with 
 python -m corners offline          # rebuild everything from local data, no API calls
 python -m corners report           # refresh results from stored data without changing it
 python -m corners stakes 2026-11-08 2026-11-09   # the model's bets for a date range
-python -m corners clv              # closing-line-value evaluation
+python -m corners clv              # profitability evaluation
+python -m corners charts out       # copy the shareable charts into the folder `out`
 python -m corners --help           # all commands
 ```
 

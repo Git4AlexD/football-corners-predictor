@@ -89,3 +89,15 @@ def test_running_the_file_directly_shows_the_help(monkeypatch, capsys):
 
     assert stop.value.code == 0
     assert "usage: corners" in capsys.readouterr().out
+
+
+def test_the_charts_command_reports_whether_anything_was_published(monkeypatch, tmp_path):
+    copied = []
+    monkeypatch.setattr(
+        cli, "copy_publishable_charts", lambda destination: copied.append(destination) or ["a.png"]
+    )
+    assert cli.main(["charts", str(tmp_path / "out")]) == 0
+    assert copied == [tmp_path / "out"]
+
+    monkeypatch.setattr(cli, "copy_publishable_charts", lambda destination: [])
+    assert cli.main(["charts", str(tmp_path / "out")]) == 1  # nothing to publish is a failure

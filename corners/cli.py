@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -15,6 +16,7 @@ from corners.data.odds_history import capture_odds, load_odds_history
 from corners.data.results import update_results
 from corners.features import build_features
 from corners.log import configure_logging
+from corners.publish import copy_publishable_charts
 from corners.staking import MARKETS
 
 
@@ -67,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         "--retrain", action="store_true", help="retrain even if the training data is unchanged"
     )
     commands.add_parser("report", help="refresh results from stored data without changing it")
+    charts = commands.add_parser("charts", help="copy the charts that are safe to share into a folder")
+    charts.add_argument("destination", help="folder to copy them into")
     commands.add_parser("odds", help="capture odds snapshots")
     results = commands.add_parser("results", help="update match results")
     results.add_argument("--full", action="store_true", help="re-download every season")
@@ -90,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
             return pipeline.run_steps(pipeline.offline_steps(args.retrain))
         case "report":
             return pipeline.run_steps(pipeline.report_steps())
+        case "charts":
+            return 0 if copy_publishable_charts(Path(args.destination)) else 1  # 1: nothing to publish
         case "odds":
             capture_odds(ApiFootballClient())
         case "results":

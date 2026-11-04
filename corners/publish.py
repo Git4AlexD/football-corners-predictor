@@ -24,6 +24,7 @@ PUBLISHABLE_CHARTS = {
     "flat/equity_home.png": "equity_home.png",
     "flat/equity_away.png": "equity_away.png",
     "flat/cash_flow.png": "cash_flow.png",
+    "flat/returns_by_target.png": "returns_by_target.png",
 }
 
 

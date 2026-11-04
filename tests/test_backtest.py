@@ -108,6 +108,7 @@ def test_tracking_writes_tables_and_charts_for_both_bankroll_modes(workspace, tr
         assert (folder / "bets.csv").stat().st_size > 0
         assert (folder / "equity_combined.png").stat().st_size > 0
         assert (folder / "cash_flow.png").stat().st_size > 0
+        assert (folder / "returns_by_target.png").stat().st_size > 0
 
 
 def test_the_result_book_loads_stored_results(workspace, raw_results):

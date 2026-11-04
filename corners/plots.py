@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 # Light-mode palette: categorical blue, orange and aqua; status green and red.
 BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 GOOD, BAD = "#0ca30c", "#d03b3b"
+MIN_COMMITTED_FOR_RETURN_PCT = 100.0  # £ committed before a percentage return is drawn
 GRAY, GRID, INK, MUTED, SURFACE = "#c3c2b7", "#e1e0d9", "#0b0b0b", "#52514e", "#fcfcfb"
 
 
@@ -98,6 +99,97 @@ def _plot_equity_curve(records: pd.DataFrame, label: str, path: Path) -> None:
         ax.set_axisbelow(True)
     fig.autofmt_xdate()
     fig.tight_layout()
+    _save(fig, path)
+
+
+def _dodged_end_labels(fig: Figure, ax, x, items: list[tuple[float, str, str]]) -> None:
+    """Mark each line's end point and label it, nudging labels apart so none overlap.
+
+    ``items`` holds ``(y, colour, text)``. Labels are spaced in screen units, so the
+    spacing holds whatever the data range. The markers stay on the true values.
+    """
+    if not items:
+        return
+    min_gap_px = 15
+    pixels = [ax.transData.transform((mdates.date2num(x), y))[1] for y, _, _ in items]
+    order = sorted(range(len(items)), key=lambda i: pixels[i])
+    placed: dict[int, float] = {}
+    previous = -np.inf
+    for i in order:
+        previous = max(pixels[i], previous + min_gap_px)
+        placed[i] = previous
+    shift = np.mean([pixels[i] for i in placed]) - np.mean(list(placed.values()))  # re-centre the group
+    for i, (y, colour, text) in enumerate(items):
+        dy = (placed[i] + shift - pixels[i]) * 72 / fig.dpi
+        _end_label(ax, x, y, text, colour, dy=round(dy))
+
+
+def plot_returns_by_target(records: pd.DataFrame, path: Path) -> None:
+    """Cumulative return per target with a combined line (top) and return on amount committed (bottom).
+
+    Built from every settled decision in the back-test. Two panels sharing a date axis
+    rather than one chart with two y-axes, because pounds and percentages are different scales.
+    """
+    settled = records[records["status"].isin(["WIN", "LOSS"])].copy()
+    if settled.empty:
+        return
+    settled["day"] = pd.to_datetime(settled["date"]).dt.normalize()
+    days = pd.DatetimeIndex(sorted(settled["day"].unique()))
+    start = days[0] - pd.Timedelta(days=1)
+
+    lines = [
+        (MARKETS[key].label, colour, 2.0, settled[settled["market"] == key])
+        for key, colour in (("total", BLUE), ("home", ORANGE), ("away", AQUA))
+    ] + [("All targets combined", INK, 3.0, settled)]
+    lines = [line for line in lines if not line[3].empty]
+
+    fig = Figure(figsize=(10, 7))
+    fig.patch.set_facecolor(SURFACE)
+    ax_gbp, ax_roi = fig.subplots(2, 1, sharex=True, height_ratios=[2, 1])
+    ends_gbp, ends_roi = [], []
+    for label, colour, width, group in lines:
+        daily = group.groupby("day")[["stake", "profit"]].sum().reindex(days, fill_value=0.0).cumsum()
+        ret = [0.0, *daily["profit"]]
+        # The first few small decisions would swing the percentage between extremes.
+        committed = daily["stake"].where(daily["stake"] >= MIN_COMMITTED_FOR_RETURN_PCT)
+        roi = (100 * daily["profit"] / committed).to_numpy()
+        ax_gbp.step([start, *days], ret, where="post", color=colour, linewidth=width, label=label)
+        ax_roi.step(days, roi, where="post", color=colour, linewidth=width)
+        ends_gbp.append((ret[-1], colour, f"{'+' if ret[-1] >= 0 else '-'}£{abs(ret[-1]):,.0f}"))
+        if not np.isnan(roi[-1]):
+            ends_roi.append((roi[-1], colour, f"{roi[-1]:+.1f}%"))
+
+    for ax in (ax_gbp, ax_roi):
+        ax.set_facecolor(SURFACE)
+        ax.axhline(0, color=MUTED, linewidth=1)
+        ax.grid(True, color=GRID, linewidth=1)
+        ax.set_axisbelow(True)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        ax.tick_params(colors=MUTED, labelsize=9)
+        ax.set_xlim(start, days[-1] + (days[-1] - start) * 0.16)  # room for the end labels
+    ax_gbp.set_ylabel("Cumulative return (£)", color=MUTED, fontsize=9)
+    ax_roi.set_ylabel("Return on amount committed (%)", color=MUTED, fontsize=9)
+    ax_roi.text(
+        0.01,
+        0.95,
+        f"Shown once £{MIN_COMMITTED_FOR_RETURN_PCT:,.0f} has been committed",
+        transform=ax_roi.transAxes,
+        va="top",
+        fontsize=8,
+        color=MUTED,
+    )
+    ax_gbp.legend(frameon=False, fontsize=9, loc="upper left", labelcolor=INK)
+    ax_roi.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO, interval=2))
+    ax_roi.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+
+    _titled_layout(
+        fig,
+        "Cumulative return by target, and combined",
+        f"Back-test of every settled decision ({len(settled)}), including those priced at the closing price.",
+    )
+    _dodged_end_labels(fig, ax_gbp, days[-1], ends_gbp)
+    _dodged_end_labels(fig, ax_roi, days[-1], ends_roi)
     _save(fig, path)
 
 

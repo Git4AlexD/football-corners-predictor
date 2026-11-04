@@ -19,7 +19,7 @@ import pandas as pd
 
 from corners.config import RAW_RESULTS_FILE, RESULT_DATE_TOLERANCE_DAYS, RESULTS_DIR, STAKING
 from corners.features import clean_results
-from corners.plots import plot_cash_flow, plot_equity_curves
+from corners.plots import plot_cash_flow, plot_equity_curves, plot_returns_by_target
 from corners.staking import BET, MARKETS, Evaluation, FixtureEvaluator
 
 log = logging.getLogger(__name__)
@@ -203,6 +203,7 @@ def track(evaluator: FixtureEvaluator, history: pd.DataFrame, results: ResultBoo
         export_bets(records, out_dir / "bets.csv")
         plot_equity_curves(records, out_dir)
         plot_cash_flow(records, out_dir / "cash_flow.png")
+        plot_returns_by_target(records, out_dir / "returns_by_target.png")
         description = (
             f"compounding: each market starts at {STAKING.bankroll:,.0f} and keeps its winnings"
             if compounding

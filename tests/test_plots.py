@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from corners.plots import plot_cash_flow, plot_equity_curves, plot_profit_over_time, plot_roi_comparison
+from corners.plots import (
+    plot_cash_flow,
+    plot_equity_curves,
+    plot_profit_over_time,
+    plot_returns_by_target,
+    plot_roi_comparison,
+)
 
 
 @pytest.fixture
@@ -88,3 +94,19 @@ def test_profit_over_time_has_a_panel_per_market(records, tmp_path):
 def test_profit_over_time_needs_settled_bets(records, tmp_path):
     plot_profit_over_time(records.assign(status="PENDING"), tmp_path / "profit.png")
     assert not (tmp_path / "profit.png").exists()
+
+
+def test_returns_by_target_draws_each_target_and_the_combined_line(records, tmp_path):
+    plot_returns_by_target(records, tmp_path / "returns.png")
+    assert drawn(tmp_path / "returns.png")
+
+
+def test_returns_by_target_copes_with_one_target_and_little_committed(records, tmp_path):
+    only_total = records[records["market"] == "total"].head(2)  # £20 committed: no percentage line yet
+    plot_returns_by_target(only_total, tmp_path / "returns.png")
+    assert drawn(tmp_path / "returns.png")
+
+
+def test_returns_by_target_needs_settled_decisions(records, tmp_path):
+    plot_returns_by_target(records.assign(status="PENDING"), tmp_path / "returns.png")
+    assert not (tmp_path / "returns.png").exists()

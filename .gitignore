@@ -12,8 +12,8 @@ htmlcov/
 # Secrets
 .env
 
-# Generated data, results and logs. Odds come from API-Football, whose
-# terms don't allow redistribution, so no data is committed. Anchored to the
+# Generated data, results and logs. The data comes from third-party providers
+# whose terms may restrict redistribution, so none of it is committed. Anchored to the
 # root so the corners/data package itself is not ignored.
 /data/
 /results/

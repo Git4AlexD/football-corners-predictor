@@ -11,7 +11,10 @@ def make_results(workspace, names):
 
 
 def test_only_the_whitelisted_charts_are_copied(workspace, tmp_path):
-    make_results(workspace, [*PUBLISHABLE_CHARTS, "flat/bets.csv", "clv/picks.csv", "logged_bets.csv"])
+    make_results(
+        workspace,
+        [*PUBLISHABLE_CHARTS, "flat/decisions.csv", "evaluation/selections.csv", "logged_decisions.csv"],
+    )
     copied = copy_publishable_charts(tmp_path / "out")
 
     assert sorted(copied) == sorted(PUBLISHABLE_CHARTS.values())
@@ -19,9 +22,9 @@ def test_only_the_whitelisted_charts_are_copied(workspace, tmp_path):
 
 
 def test_charts_are_published_under_their_public_names(workspace, tmp_path):
-    make_results(workspace, ["clv/expected_vs_actual_roi.png"])
-    assert copy_publishable_charts(tmp_path / "out") == ["return_on_stake.png"]
-    assert (tmp_path / "out" / "return_on_stake.png").read_bytes() == b"png"
+    make_results(workspace, ["evaluation/expected_vs_realised_return.png"])
+    assert copy_publishable_charts(tmp_path / "out") == ["expected_vs_realised_return.png"]
+    assert (tmp_path / "out" / "expected_vs_realised_return.png").read_bytes() == b"png"
 
 
 def test_a_chart_that_does_not_exist_yet_is_skipped(workspace, tmp_path, caplog):

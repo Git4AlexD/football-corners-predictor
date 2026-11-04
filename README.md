@@ -47,7 +47,7 @@ flowchart LR
 
 | Step | Module | What it does |
 |---|---|---|
-| Capture market prices | `corners.data.odds_history` | Records a locked **early** and **closing** price snapshot per fixture for four price types. Runs first because a missed snapshot can never be recovered: the free API plan has no historical prices. |
+| Capture market prices | `corners.data.price_history` | Records a locked **early** and **closing** price snapshot per fixture for four price types. Runs first because a missed snapshot can never be recovered: the free API plan has no historical prices. |
 | Update results | `corners.data.results` | Downloads results from football-data.co.uk, filling recent gaps from API-Football when that source is unavailable. |
 | Build features | `corners.features` | Builds exponentially weighted team form (half-life 25 matches) for corners, shots and goals, for and against. |
 | Train if needed | `corners.model` | Retrains only when a fingerprint of the training data or model specification changes. |
@@ -83,7 +83,7 @@ Instead, every decision is valued at the **closing price**, the market's final a
 
 A forecast that consistently finds better prices than the fair closing price has real information in it, whatever its realised results so far. Because this value doesn't depend on individual outcomes, it gives a reliable answer from far fewer decisions.
 
-`python -m corners clv` replays the engine's decisions on the early prices for every fixture with both snapshots, and reports for each target:
+`python -m corners evaluate` replays the engine's decisions on the early prices for every fixture with both snapshots, and reports for each target:
 
 - the **expected return** at closing prices, with a 95% bootstrap confidence interval, and a verdict: whether the whole interval is above zero, all below zero, or *not clear yet*;
 - the share of decisions that **beat the fair closing price**;
@@ -93,11 +93,11 @@ A forecast that consistently finds better prices than the fair closing price has
 
 The pipeline publishes its charts to this repository's [`charts` branch](https://github.com/Git4AlexD/football-corners-predictor/tree/charts) after every daily run, so the charts below always show the latest results. The evaluation is still in progress. The charts contain no prices, fixtures or other provider data, and all positions are hypothetical, sized from a notional £1,000 of capital.
 
-![Return by target](https://raw.githubusercontent.com/Git4AlexD/football-corners-predictor/charts/return_on_stake.png)
+![Return by target](https://raw.githubusercontent.com/Git4AlexD/football-corners-predictor/charts/expected_vs_realised_return.png)
 
 Expected return at closing prices (blue) against the realised return so far (orange), each with a 95% confidence interval. A target shows a real advantage only when the whole blue interval is above zero. The orange intervals are much wider, which is why realised outcomes alone can't settle the question yet.
 
-![Cumulative return](https://raw.githubusercontent.com/Git4AlexD/football-corners-predictor/charts/profit_over_time.png)
+![Cumulative return](https://raw.githubusercontent.com/Git4AlexD/football-corners-predictor/charts/cumulative_return.png)
 
 Running return per target: expected at closing prices against realised. Both charts above only include decisions with an early and a closing price recorded.
 
@@ -109,13 +109,13 @@ The tables behind the charts are written locally by the pipeline and are not com
 
 | File | Contents |
 |---|---|
-| `results/clv/summary.csv` | Per target: expected and realised return with 95% intervals, and the verdict |
-| `results/clv/expected_vs_actual_roi.png` | Chart of expected vs realised return per target |
-| `results/clv/profit_over_time.png` | Cumulative expected vs realised return per target |
-| `results/clv/picks.csv` | Every selection, valued at the closing price and settled |
-| `results/clv/by_ev_band.csv` | Whether a higher calculated EV goes with better prices |
+| `results/evaluation/summary.csv` | Per target: expected and realised return with 95% intervals, and the verdict |
+| `results/evaluation/expected_vs_realised_return.png` | Chart of expected vs realised return per target |
+| `results/evaluation/cumulative_return.png` | Cumulative expected vs realised return per target |
+| `results/evaluation/selections.csv` | Every selection, valued at the closing price and settled |
+| `results/evaluation/by_ev_band.csv` | Whether a higher calculated EV goes with better prices |
 | `results/flat/`, `results/compounding/` | Back-test decisions, charts and cash flow, with fixed and compounding capital |
-| `results/logged_bets.csv` | Decisions as recommended at the time, graded against results |
+| `results/logged_decisions.csv` | Decisions as recommended at the time, graded against results |
 | `data/model_params.json`, `logs/pipeline.log` | Each model's coefficients, p-values and train/test R², saved whenever it retrains |
 
 ## Engineering
@@ -124,7 +124,7 @@ The tables behind the charts are written locally by the pipeline and are not com
 - **No leakage into the back-test.** The model stores its training cut-off, and the back-test and closing-price evaluation exclude every fixture on or before it. Results therefore stay out-of-sample after each season rollover.
 - **What was recommended vs what would be.** The back-test asks how *today's* model would have done. A separate append-only decision log records what the pipeline *actually recommended* before each kickoff, and is graded separately.
 - **Consistent team form.** Live predictions and the back-test read the same "form after each team's latest match" table, so a fixture gets identical inputs whether it is predicted before kickoff or re-evaluated afterwards. The test suite checks this equivalence.
-- **Price history as a dataset.** Locking one early and one closing price snapshot per fixture builds the dataset that makes the closing-price evaluation possible. One unfiltered API request per fixture covers all four price types, a quarter of the per-type cost.
+- **Price history as a dataset.** Locking one early and one closing price snapshot per fixture builds the dataset that makes the closing-price evaluation possible (stored as `odds_history.csv`, whose column names mirror the provider's wording so that data already collected keeps loading). One unfiltered API request per fixture covers all four price types, a quarter of the per-type cost.
 - **Deployment.** The daily run is a scheduled GitHub Actions workflow ([`deploy/daily-pipeline.yml`](deploy/daily-pipeline.yml)) in a separate private repository that stores the data, so the API key, data and run logs never appear in this repository. Each run commits the updated data back and publishes the result charts to this repository's `charts` branch, using a token that can only write to this repository. Only a fixed list of charts is ever published ([`corners/publish.py`](corners/publish.py)).
 - **Resilience.** API rate limits are retried with back-off, and part of the daily quota is reserved for price capture. Each step falls back to its last good output, so a source outage doesn't stop the run.
 - **Name matching across providers.** Token overlap with a similarity tie-break, strict fuzzy matching and an explicit alias table. Unmatched names are logged and surfaced after every run.
@@ -139,12 +139,12 @@ corners/
 ├── pipeline.py         # daily run orchestration
 ├── data/
 │   ├── api_football.py # API client: retries, quota tracking, price parsing
-│   ├── odds_history.py # early/closing price snapshot store
+│   ├── price_history.py # early/closing price snapshot store
 │   └── results.py      # football-data.co.uk + API fallback
 ├── features.py         # EWM team form, match and team-form tables
 ├── model.py            # negative-binomial GLMs, fingerprinted retraining
 ├── pricing.py          # NB probabilities, removing the market margin, market-ladder fit
-├── staking.py          # EV and position-sizing decisions, fixture evaluation
+├── decisions.py        # EV and position-sizing decisions, fixture evaluation
 ├── tracking.py         # out-of-sample back-test and grading
 ├── decision_log.py     # append-only record of live decisions
 ├── evaluation.py       # evaluation against closing prices
@@ -152,7 +152,7 @@ corners/
 ├── publish.py          # the fixed list of charts that are safe to publish
 └── teams.py            # cross-provider team-name matching
 tests/                  # pytest: unit + end-to-end on synthetic data
-deploy/                 # scheduled workflow and git settings for the private data repository
+deploy/                 # scheduled workflow, git settings for the private data repository, chart publishing
 ```
 
 Generated files go to `data/`, `results/` and `logs/`, none of which are committed.
@@ -168,9 +168,10 @@ cp .env.example .env               # then add your API key to .env
 python -m corners run              # full daily pipeline (also the default with no command)
 python -m corners offline          # rebuild everything from local data, no API calls
 python -m corners report           # refresh results from stored data without changing it
-python -m corners stakes 2026-11-08 2026-11-09   # the model's decisions for a date range
-python -m corners clv              # evaluation against closing prices
+python -m corners decisions 2026-11-08 2026-11-09   # the model's decisions for a date range
+python -m corners evaluate         # evaluation against closing prices
 python -m corners charts out       # copy the shareable charts into the folder `out`
+bash deploy/publish-charts.sh      # publish those charts to the `charts` branch now
 python -m corners --help           # all commands
 ```
 
@@ -181,6 +182,8 @@ pip install -r requirements-dev.txt
 pytest
 ruff check . && ruff format --check .
 ```
+
+Both requirements files pin exact versions, so a new library release can't break the daily run unannounced. Dependabot proposes updates weekly as pull requests, which CI tests before they are merged.
 
 The first run downloads every season from 2014/15. Price history accumulates from the day you start running the pipeline.
 

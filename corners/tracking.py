@@ -1,9 +1,9 @@
-"""Back-test the current model over the whole odds history and grade it.
+"""Back-test the current model over the whole price history and grade it.
 
-Every fixture in the odds history is re-evaluated with the current model and
-graded against the actual result where one exists. Two bankroll modes are
-reported: *flat* (every stake sized off the same bankroll) and
-*compounding* (each market's bankroll grows and shrinks with its own settled
+Every fixture in the price history is re-evaluated with the current model and
+graded against the actual result where one exists. Two capital modes are
+reported: *flat* (every size sized off the same capital) and
+*compounding* (each market's capital grows and shrinks with its own settled
 results). Fixtures on or before the model's last training date are left out,
 so a back-test never grades a match the model was trained on.
 """
@@ -17,15 +17,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from corners.config import RAW_RESULTS_FILE, RESULT_DATE_TOLERANCE_DAYS, RESULTS_DIR, STAKING
+from corners.config import DECISION_CONFIG, RAW_RESULTS_FILE, RESULT_DATE_TOLERANCE_DAYS, RESULTS_DIR
+from corners.decisions import MARKETS, SELECTED, Evaluation, FixtureEvaluator
 from corners.features import clean_results
 from corners.plots import plot_cash_flow, plot_equity_curves, plot_returns_by_target
-from corners.staking import BET, MARKETS, Evaluation, FixtureEvaluator
 
 log = logging.getLogger(__name__)
 
-SETTLED = ("WIN", "LOSS")
-BET_STATUSES = ("WIN", "LOSS", "PENDING")
+SETTLED = ("CORRECT", "INCORRECT")
+DECISION_STATUSES = ("CORRECT", "INCORRECT", "PENDING")
 
 
 class ResultBook:
@@ -59,16 +59,16 @@ class ResultBook:
         return float(matches.loc[nearest, column])
 
 
-def settle(side: str, line: float, odds: float, stake: float, actual: float | None) -> tuple[str, float]:
-    """``(status, profit)`` for a bet given the actual count (None = not played yet)."""
+def settle(side: str, line: float, price: float, size: float, actual: float | None) -> tuple[str, float]:
+    """``(status, gain)`` for a decision given the actual count (None = not played yet)."""
     if actual is None:
         return "PENDING", 0.0
-    won = actual > line if side == "Over" else actual < line
-    return ("WIN", stake * (odds - 1.0)) if won else ("LOSS", -stake)
+    correct = actual > line if side == "Over" else actual < line
+    return ("CORRECT", size * (price - 1.0)) if correct else ("INCORRECT", -size)
 
 
 def grade(evaluation: Evaluation, results: ResultBook) -> dict[str, Any]:
-    """Flatten an evaluation into a record, settling it if it was a bet."""
+    """Flatten an evaluation into a record, settling it if it was a decision."""
     d = evaluation.decision
     record = {
         "market": evaluation.market,
@@ -80,14 +80,14 @@ def grade(evaluation: Evaluation, results: ResultBook) -> dict[str, Any]:
         "status": evaluation.status,
         "side": d.side if d else None,
         "line": d.line if d else None,
-        "odds": d.odds if d else None,
-        "bookmaker": evaluation.bookmaker,
+        "price": d.price if d else None,
+        "provider": evaluation.provider,
         "ev": d.ev if d else None,
-        "stake": d.stake if d else 0.0,
+        "size": d.size if d else 0.0,
         "actual": None,
-        "profit": 0.0,
+        "gain": 0.0,
     }
-    if evaluation.status != BET:
+    if evaluation.status != SELECTED:
         return record
 
     actual = results.actual(
@@ -97,8 +97,8 @@ def grade(evaluation: Evaluation, results: ResultBook) -> dict[str, Any]:
         evaluation.fixture_date,
         MARKETS[evaluation.market].actual_column,
     )
-    status, profit = settle(d.side, d.line, d.odds, d.stake, actual)
-    record.update(status=status, actual=actual, profit=profit)
+    status, gain = settle(d.side, d.line, d.price, d.size, actual)
+    record.update(status=status, actual=actual, gain=gain)
     return record
 
 
@@ -119,44 +119,44 @@ def backtest(
     """Evaluate and grade every out-of-sample fixture in every market.
 
     In compounding mode, fixtures sharing a kickoff time are all sized off
-    the same bankroll, which only moves once their results are in.
+    the same capital, which only moves once their results are in.
     """
     history = out_of_sample(history, evaluator.model.train_end_date)
     records = []
     for market in MARKETS:
-        bankroll = evaluator.config.bankroll
+        capital = evaluator.config.capital
         for _, kickoff_group in history.groupby("start_datetime", sort=True):
-            stake_bankroll = max(bankroll, 0.0)
+            sizing_capital = max(capital, 0.0)
             for _, row in kickoff_group.iterrows():
-                evaluation = evaluator.evaluate(row, market, bankroll=stake_bankroll if compounding else None)
+                evaluation = evaluator.evaluate(row, market, capital=sizing_capital if compounding else None)
                 record = grade(evaluation, results)
                 if compounding:
-                    record["bankroll_at_bet"] = round(stake_bankroll, 2)
+                    record["capital_at_decision"] = round(sizing_capital, 2)
                     if record["status"] in SETTLED:
-                        bankroll += record["profit"]
+                        capital += record["gain"]
                 records.append(record)
         log.info("Back-tested %s over %d fixtures", MARKETS[market].label.lower(), len(history))
     return pd.DataFrame(records)
 
 
 def league_summary(records: pd.DataFrame) -> pd.DataFrame:
-    """Bets, record, stake and return per market and league."""
-    bets = records[records["status"].isin(BET_STATUSES)]
+    """Decisions, record, size and return per market and league."""
+    decisions = records[records["status"].isin(DECISION_STATUSES)]
     rows = []
-    for (market, league), group in bets.groupby(["market", "league"]):
+    for (market, league), group in decisions.groupby(["market", "league"]):
         settled = group[group["status"].isin(SETTLED)]
-        staked = settled["stake"].sum()
+        committed = settled["size"].sum()
         rows.append(
             {
                 "market": market,
                 "league": league,
-                "bets": len(group),
-                "wins": int((settled["status"] == "WIN").sum()),
-                "losses": int((settled["status"] == "LOSS").sum()),
+                "decisions": len(group),
+                "correct": int((settled["status"] == "CORRECT").sum()),
+                "incorrect": int((settled["status"] == "INCORRECT").sum()),
                 "pending": int((group["status"] == "PENDING").sum()),
-                "settled_stake": round(staked, 2),
-                "profit": round(settled["profit"].sum(), 2),
-                "roi": settled["profit"].sum() / staked if staked > 0 else np.nan,
+                "settled_committed": round(committed, 2),
+                "gain": round(settled["gain"].sum(), 2),
+                "roi": settled["gain"].sum() / committed if committed > 0 else np.nan,
             }
         )
     return pd.DataFrame(rows)
@@ -167,7 +167,7 @@ def format_summary(records: pd.DataFrame, title: str) -> str:
     summary = league_summary(records)
     lines = [title]
     if summary.empty:
-        return title + "\n    No bets yet."
+        return title + "\n    No decisions yet."
     for market, spec in MARKETS.items():
         group = summary[summary["market"] == market]
         if group.empty:
@@ -176,38 +176,40 @@ def format_summary(records: pd.DataFrame, title: str) -> str:
         table = group.drop(columns="market").copy()
         table["roi"] = table["roi"].map(lambda v: "n/a" if pd.isna(v) else f"{v:+.1%}")
         lines += ["    " + line for line in table.to_string(index=False).splitlines()]
-        staked, profit = group["settled_stake"].sum(), group["profit"].sum()
-        roi = f"{profit / staked:+.1%}" if staked else "n/a"
+        committed, gain = group["settled_committed"].sum(), group["gain"].sum()
+        roi = f"{gain / committed:+.1%}" if committed else "n/a"
         lines.append(
-            f"    All leagues: {group['bets'].sum()} bets, {group['wins'].sum()}W-{group['losses'].sum()}L, "
-            f"{group['pending'].sum()} pending, settled stake {staked:.2f}, profit {profit:+.2f} ({roi})"
+            f"    All leagues: {group['decisions'].sum()} decisions, "
+            f"{group['correct'].sum()} correct, {group['incorrect'].sum()} incorrect, "
+            f"{group['pending'].sum()} pending, settled committed {committed:.2f}, "
+            f"gain {gain:+.2f} ({roi})"
         )
     return "\n".join(lines)
 
 
-def export_bets(records: pd.DataFrame, path: Path) -> None:
-    """Write placed bets (settled or pending) to CSV."""
-    bets = records[records["status"].isin(BET_STATUSES)].copy()
-    bets["date"] = pd.to_datetime(bets["date"]).dt.strftime("%Y-%m-%d")
-    bets = bets.sort_values(["market", "date", "home"])
+def export_decisions(records: pd.DataFrame, path: Path) -> None:
+    """Write placed decisions (settled or pending) to CSV."""
+    decisions = records[records["status"].isin(DECISION_STATUSES)].copy()
+    decisions["date"] = pd.to_datetime(decisions["date"]).dt.strftime("%Y-%m-%d")
+    decisions = decisions.sort_values(["market", "date", "home"])
     path.parent.mkdir(parents=True, exist_ok=True)
-    bets.drop(columns=[c for c in ("fixture_id",) if c in bets]).to_csv(path, index=False)
+    decisions.drop(columns=[c for c in ("fixture_id",) if c in decisions]).to_csv(path, index=False)
 
 
 def track(evaluator: FixtureEvaluator, history: pd.DataFrame, results: ResultBook) -> dict[str, pd.DataFrame]:
-    """Run both bankroll modes, write their tables and charts, and log summaries."""
+    """Run both capital modes, write their tables and charts, and log summaries."""
     outputs = {}
     for mode, compounding in (("flat", False), ("compounding", True)):
         records = backtest(evaluator, history, results, compounding=compounding)
         out_dir = RESULTS_DIR / mode
-        export_bets(records, out_dir / "bets.csv")
+        export_decisions(records, out_dir / "decisions.csv")
         plot_equity_curves(records, out_dir)
         plot_cash_flow(records, out_dir / "cash_flow.png")
         plot_returns_by_target(records, out_dir / "returns_by_target.png")
         description = (
-            f"compounding: each market starts at {STAKING.bankroll:,.0f} and keeps its winnings"
+            f"compounding: each market starts at {DECISION_CONFIG.capital:,.0f} and keeps its returns"
             if compounding
-            else f"flat: every stake sized off {STAKING.bankroll:,.0f}"
+            else f"flat: every size sized off {DECISION_CONFIG.capital:,.0f}"
         )
         log.info("\n%s", format_summary(records, f"Back-test results ({description})"))
         outputs[mode] = records

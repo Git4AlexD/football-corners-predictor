@@ -8,7 +8,7 @@ include = ["corners*"]
 [project]
 name = "corners"
 version = "2.0.0"
-description = "Forecasting football corners and evaluating the forecasts against the betting market"
+description = "Probabilistic forecasting of football corner counts, evaluated against market prices"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

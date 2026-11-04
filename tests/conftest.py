@@ -12,12 +12,12 @@ import pandas as pd
 import pytest
 
 from corners.config import LEAGUES
-from corners.data.odds_history import ODDS_COLUMNS, odds_column
+from corners.data.price_history import PRICE_COLUMNS, price_column
 from corners.data.results import RESULT_COLUMNS, add_derived_columns
+from corners.decisions import MARKETS, FixtureEvaluator
 from corners.features import FormBook, _team_rows, build_match_features, build_team_form, clean_results
 from corners.model import TrainedModel, complete_rows, fit_models
 from corners.pricing import p_over
-from corners.staking import MARKETS, FixtureEvaluator
 from corners.teams import build_team_lookup
 from corners.tracking import ResultBook
 
@@ -99,11 +99,11 @@ PATH_CONSTANTS = {
     "RAW_RESULTS_FILE": "data/raw_results.csv",
     "FEATURES_FILE": "data/features.csv",
     "TEAM_FORM_FILE": "data/team_form.csv",
-    "ODDS_HISTORY_FILE": "data/odds_history.csv",
+    "PRICE_HISTORY_FILE": "data/odds_history.csv",
     "MODEL_FILE": "data/model_params.json",
     "DECISION_LOG_FILE": "data/decision_log.csv",
     "UNMATCHED_TEAMS_FILE": "data/unmatched_teams.csv",
-    "BET_ID_CACHE_FILE": "data/api_bet_ids.json",
+    "MARKET_ID_CACHE_FILE": "data/api_bet_ids.json",
     "LOCK_FILE": "data/.pipeline.lock",
 }
 
@@ -165,8 +165,8 @@ def trained(raw_results) -> Trained:
 
 
 @pytest.fixture(scope="session")
-def make_odds_row():
-    """Build an odds-history row for a match, priced from a negative binomial.
+def make_price_row():
+    """Build an price-history row for a match, priced from a negative binomial.
 
     ``mu`` is the mean the early prices imply (the model's own mean is higher,
     so a low ``mu`` makes the Over look like good value). Pass ``closing_mu``
@@ -174,7 +174,7 @@ def make_odds_row():
     """
 
     def build(match, fixture_id=1, mu=9.5, closing_mu=None, alpha=0.05, hours=15) -> pd.Series:
-        row = {column: np.nan for column in ODDS_COLUMNS} | {
+        row = {column: np.nan for column in PRICE_COLUMNS} | {
             "fixture_id": fixture_id,
             "league": match["League"],
             "start_datetime": pd.Timestamp(match["Date"]).tz_localize("UTC") + pd.Timedelta(hours=hours),
@@ -194,10 +194,10 @@ def make_odds_row():
             ):
                 for line in spec.lines:
                     p = p_over(mean, alpha, line)
-                    row[odds_column(stage, "over", line, spec.odds_key)] = 1 / (p * 1.05)
-                    row[odds_column(stage, "under", line, spec.odds_key)] = 1 / ((1 - p) * 1.05)
-            row[odds_column(stage, "over", 2.5, "goals")] = 1.9
-            row[odds_column(stage, "under", 2.5, "goals")] = 1.9
+                    row[price_column(stage, "over", line, spec.price_key)] = 1 / (p * 1.05)
+                    row[price_column(stage, "under", line, spec.price_key)] = 1 / ((1 - p) * 1.05)
+            row[price_column(stage, "over", 2.5, "goals")] = 1.9
+            row[price_column(stage, "under", 2.5, "goals")] = 1.9
         return pd.Series(row)
 
     return build
@@ -205,7 +205,7 @@ def make_odds_row():
 
 @pytest.fixture(scope="session")
 def make_history():
-    """Turn odds-history rows into a DataFrame with proper timestamp columns."""
+    """Turn price-history rows into a DataFrame with proper timestamp columns."""
 
     def build(rows) -> pd.DataFrame:
         history = pd.DataFrame(rows).reset_index(drop=True)

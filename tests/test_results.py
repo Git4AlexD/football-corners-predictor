@@ -57,7 +57,7 @@ def test_a_season_file_is_parsed_and_incomplete_rows_dropped(monkeypatch):
     assert row["League"] == "Premier League"
     assert row["Season"] == "2026/2027"
     assert row["Date"] == pd.Timestamp("2026-08-02")  # day-first dates
-    assert "B365H" not in df.columns  # unused bookmaker columns are dropped
+    assert "B365H" not in df.columns  # unused provider columns are dropped
 
 
 @pytest.mark.parametrize(
@@ -312,4 +312,4 @@ def test_nan_odds_are_allowed_in_fallback_rows(stored, frozen_today):
         stats={1: [team_stats("Brighton", 7), team_stats("Everton", 3)]},
     )
     new = fetch_recent_via_api(stored, api)
-    assert np.isnan(new.iloc[0]["Avg>2.5"])  # the API has no pre-closing goals odds
+    assert np.isnan(new.iloc[0]["Avg>2.5"])  # the API has no pre-closing goals price

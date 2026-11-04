@@ -1,6 +1,6 @@
-"""Negative-binomial pricing and bookmaker-odds handling.
+"""Negative-binomial pricing and provider-price handling.
 
-Corner counts are overdispersed, so both the model and the bookmaker's
+Corner counts are overdispersed, so both the model and the provider's
 over/under ladder are represented as negative-binomial (NB) distributions
 parameterised by a mean ``mu`` and dispersion ``alpha``
 (variance = mu + alpha * mu^2).
@@ -25,8 +25,8 @@ try:
 except ImportError:  # pragma: no cover
     _nbinom_pmf_kernel = nbinom.pmf
 
-OddsLadder = Mapping[float, tuple[float, float]]
-"""``{line: (over_odds, under_odds)}``; a missing price is 0.0."""
+PriceLadder = Mapping[float, tuple[float, float]]
+"""``{line: (over_price, under_price)}``; a missing price is 0.0."""
 
 
 def nb_pmf(mu: float, alpha: float, k_max: int = PMF_MAX_K) -> np.ndarray:
@@ -51,30 +51,30 @@ def p_over(mu: float, alpha: float, line: float, k_max: int = PMF_MAX_K) -> floa
     return float(pmf[np.arange(k_max) > line].sum())
 
 
-def devig(over_odds: float, under_odds: float) -> tuple[float, float]:
+def devig(over_price: float, under_price: float) -> tuple[float, float]:
     """Proportional de-vig: returns ``(fair P(over), overround)``."""
-    inv_over, inv_under = 1.0 / over_odds, 1.0 / under_odds
+    inv_over, inv_under = 1.0 / over_price, 1.0 / under_price
     overround = inv_over + inv_under
     return inv_over / overround, overround
 
 
-def fair_over_prob(over_odds: float, under_odds: float) -> float:
+def fair_over_prob(over_price: float, under_price: float) -> float:
     """Fair P(over) from a two-way price, or NaN if either price is missing."""
-    if not (over_odds > 1 and under_odds > 1):
+    if not (over_price > 1 and under_price > 1):
         return float("nan")
-    return devig(over_odds, under_odds)[0]
+    return devig(over_price, under_price)[0]
 
 
-def is_valid_price_pair(over_odds: float, under_odds: float) -> bool:
+def is_valid_price_pair(over_price: float, under_price: float) -> bool:
     """Both prices present and the overround plausible (0.95 to 1.25)."""
-    if not (np.isfinite(over_odds) and np.isfinite(under_odds)):
+    if not (np.isfinite(over_price) and np.isfinite(under_price)):
         return False
-    if over_odds <= 1.0 or under_odds <= 1.0:
+    if over_price <= 1.0 or under_price <= 1.0:
         return False
-    return 0.95 <= 1.0 / over_odds + 1.0 / under_odds <= 1.25
+    return 0.95 <= 1.0 / over_price + 1.0 / under_price <= 1.25
 
 
-def ladder_points(ladder: OddsLadder) -> list[tuple[float, float]]:
+def ladder_points(ladder: PriceLadder) -> list[tuple[float, float]]:
     """Every usable ``(line, fair P(over))`` pair in a ladder."""
     return [
         (line, devig(over, under)[0])
@@ -96,9 +96,9 @@ def _mu_for_single_line(line: float, p_target: float, alpha: float) -> float:
 
 
 def fit_market_ladder(
-    ladder: OddsLadder, alpha_prior: float = MARKET_ALPHA_PRIOR
+    ladder: PriceLadder, alpha_prior: float = MARKET_ALPHA_PRIOR
 ) -> tuple[float | None, float | None]:
-    """Fit an NB distribution to a bookmaker's whole over/under ladder.
+    """Fit an NB distribution to a provider's whole over/under ladder.
 
     Returns the market-implied ``(mu, alpha)``, or ``(None, None)`` if the
     ladder has no usable prices. With fewer than three prices the dispersion

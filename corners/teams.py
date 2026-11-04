@@ -21,7 +21,7 @@ TeamLookup = dict[str, dict[str, str]]
 
 _STRIP_WORDS = {"fc", "cf", "afc", "ac", "sc", "ssd", "us", "usl", "calcio", "club"}
 
-# Odds-feed names that no similarity heuristic can bridge, usually a
+# Price-feed names that no similarity heuristic can bridge, usually a
 # different abbreviation convention. Keys and values are both normalised
 # (see normalise_name), so check a new key with normalise_name() first.
 TEAM_ALIASES = {

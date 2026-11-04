@@ -1,7 +1,7 @@
 """Choosing which results are safe to share publicly.
 
 Only a fixed list of charts is ever published. They show markets, dates and
-pounds, with no fixtures, odds, bookmakers or other data from the providers,
+pounds, with no fixtures, price, providers or other data from the providers,
 so a new file in ``results/`` can never be published by accident.
 """
 
@@ -17,8 +17,8 @@ log = logging.getLogger(__name__)
 
 # File under results/ -> name it is published under.
 PUBLISHABLE_CHARTS = {
-    "clv/expected_vs_actual_roi.png": "return_on_stake.png",
-    "clv/profit_over_time.png": "profit_over_time.png",
+    "evaluation/expected_vs_realised_return.png": "expected_vs_realised_return.png",
+    "evaluation/cumulative_return.png": "cumulative_return.png",
     "flat/equity_combined.png": "equity_combined.png",
     "flat/equity_total.png": "equity_total.png",
     "flat/equity_home.png": "equity_home.png",
@@ -31,7 +31,7 @@ PUBLISHABLE_CHARTS = {
 def copy_publishable_charts(destination: Path) -> list[str]:
     """Copy the shareable charts into ``destination``; returns the names copied.
 
-    A chart that hasn't been produced yet (for example, no bets have settled)
+    A chart that hasn't been produced yet (for example, no decisions have settled)
     is skipped rather than treated as an error.
     """
     destination.mkdir(parents=True, exist_ok=True)

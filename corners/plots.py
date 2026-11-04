@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 
-from corners.staking import MARKETS
+from corners.decisions import MARKETS
 
 log = logging.getLogger(__name__)
 
@@ -49,36 +49,36 @@ def plot_equity_curves(records: pd.DataFrame, out_dir: Path) -> None:
     groups = {key: records[records["market"] == key] for key in MARKETS}
     groups["combined"] = records
     for key, group in groups.items():
-        label = MARKETS[key].label if key in MARKETS else "All markets"
+        label = MARKETS[key].label if key in MARKETS else "All targets"
         _plot_equity_curve(group, label, out_dir / f"equity_{key}.png")
 
 
 def _plot_equity_curve(records: pd.DataFrame, label: str, path: Path) -> None:
-    """Cumulative staked vs staked + profit (top) and cumulative ROI (bottom).
+    """Cumulative committed vs committed + gain (top) and cumulative ROI (bottom).
 
     Two panels sharing a date axis rather than one chart with two y-axes,
     because pounds and percentages are different scales.
     """
-    settled = records[records["status"].isin(["WIN", "LOSS"])].sort_values("date", kind="stable")
+    settled = records[records["status"].isin(["CORRECT", "INCORRECT"])].sort_values("date", kind="stable")
     if settled.empty:
         return
     dates = [settled["date"].iloc[0], *settled["date"]]
-    staked = [0.0, *settled["stake"].cumsum()]
-    profit = [0.0, *settled["profit"].cumsum()]
-    value = [s + p for s, p in zip(staked, profit, strict=True)]
-    roi = [100 * p / s for s, p in zip(staked[1:], profit[1:], strict=True)]
+    committed = [0.0, *settled["size"].cumsum()]
+    gain = [0.0, *settled["gain"].cumsum()]
+    value = [s + p for s, p in zip(committed, gain, strict=True)]
+    roi = [100 * p / s for s, p in zip(committed[1:], gain[1:], strict=True)]
 
     fig = Figure(figsize=(10, 7))
     ax_gbp, ax_roi = fig.subplots(2, 1, sharex=True, height_ratios=[2, 1])
 
     ax_gbp.step(
-        dates, staked, where="post", color=GRAY, linestyle="--", linewidth=2, label="Cumulative staked"
+        dates, committed, where="post", color=GRAY, linestyle="--", linewidth=2, label="Cumulative committed"
     )
-    ax_gbp.step(dates, value, where="post", color=BLUE, linewidth=2, label="Staked + profit")
-    _end_label(ax_gbp, dates[-1], staked[-1], f"£{staked[-1]:,.0f}", GRAY, bold=False)
+    ax_gbp.step(dates, value, where="post", color=BLUE, linewidth=2, label="Committed + gain")
+    _end_label(ax_gbp, dates[-1], committed[-1], f"£{committed[-1]:,.0f}", GRAY, bold=False)
     _end_label(ax_gbp, dates[-1], value[-1], f"£{value[-1]:,.0f}", BLUE)
     ax_gbp.set_ylabel("£")
-    ax_gbp.set_title(f"{label}: {len(settled)} settled bets")
+    ax_gbp.set_title(f"{label}: {len(settled)} settled decisions")
     ax_gbp.legend(loc="upper left")
 
     # Colour each step by its own sign, not the final one.
@@ -130,7 +130,7 @@ def plot_returns_by_target(records: pd.DataFrame, path: Path) -> None:
     Built from every settled decision in the back-test. Two panels sharing a date axis
     rather than one chart with two y-axes, because pounds and percentages are different scales.
     """
-    settled = records[records["status"].isin(["WIN", "LOSS"])].copy()
+    settled = records[records["status"].isin(["CORRECT", "INCORRECT"])].copy()
     if settled.empty:
         return
     settled["day"] = pd.to_datetime(settled["date"]).dt.normalize()
@@ -148,11 +148,11 @@ def plot_returns_by_target(records: pd.DataFrame, path: Path) -> None:
     ax_gbp, ax_roi = fig.subplots(2, 1, sharex=True, height_ratios=[2, 1])
     ends_gbp, ends_roi = [], []
     for label, colour, width, group in lines:
-        daily = group.groupby("day")[["stake", "profit"]].sum().reindex(days, fill_value=0.0).cumsum()
-        ret = [0.0, *daily["profit"]]
+        daily = group.groupby("day")[["size", "gain"]].sum().reindex(days, fill_value=0.0).cumsum()
+        ret = [0.0, *daily["gain"]]
         # The first few small decisions would swing the percentage between extremes.
-        committed = daily["stake"].where(daily["stake"] >= MIN_COMMITTED_FOR_RETURN_PCT)
-        roi = (100 * daily["profit"] / committed).to_numpy()
+        committed = daily["size"].where(daily["size"] >= MIN_COMMITTED_FOR_RETURN_PCT)
+        roi = (100 * daily["gain"] / committed).to_numpy()
         ax_gbp.step([start, *days], ret, where="post", color=colour, linewidth=width, label=label)
         ax_roi.step(days, roi, where="post", color=colour, linewidth=width)
         ends_gbp.append((ret[-1], colour, f"{'+' if ret[-1] >= 0 else '-'}£{abs(ret[-1]):,.0f}"))
@@ -194,33 +194,33 @@ def plot_returns_by_target(records: pd.DataFrame, path: Path) -> None:
 
 
 def plot_cash_flow(records: pd.DataFrame, path: Path) -> None:
-    """Own money in play over time vs money made, across all markets.
+    """Own capital in play over time vs net return, across all targets.
 
-    "Out of pocket" is stakes placed minus payouts received, floored at zero
-    once winnings cover everything at risk. Each match day's stakes go out
-    before its payouts come back, so the line peaks within the day; the
-    highest peak is the most of your own money ever at risk at once.
-    Pending stakes count from today.
+    "Own capital in play" is the amount committed minus the returns received,
+    floored at zero once returns cover everything committed. Each match day's
+    positions are taken before its returns come back, so the line peaks within the
+    day; the highest peak is the most of your own capital ever in play at once.
+    Positions still pending count from today.
     """
-    bets = records[records["status"].isin(["WIN", "LOSS", "PENDING"])].copy()
-    if bets.empty:
+    decisions = records[records["status"].isin(["CORRECT", "INCORRECT", "PENDING"])].copy()
+    if decisions.empty:
         return
-    won = bets["status"] == "WIN"
-    settled = bets["status"].isin(["WIN", "LOSS"])
-    bets["returned"] = np.where(won, bets["stake"] + bets["profit"], 0.0)
-    bets["made"] = np.where(settled, bets["profit"], 0.0)
+    correct = decisions["status"] == "CORRECT"
+    settled = decisions["status"].isin(["CORRECT", "INCORRECT"])
+    decisions["returned"] = np.where(correct, decisions["size"] + decisions["gain"], 0.0)
+    decisions["made"] = np.where(settled, decisions["gain"], 0.0)
     today = pd.Timestamp.now().normalize()
-    bets["day"] = pd.to_datetime(bets["date"]).dt.normalize().clip(upper=today)
-    daily = bets.groupby("day")[["stake", "returned", "made"]].sum().sort_index()
-    pending = bets.loc[bets["status"] == "PENDING", "stake"].sum()
+    decisions["day"] = pd.to_datetime(decisions["date"]).dt.normalize().clip(upper=today)
+    daily = decisions.groupby("day")[["size", "returned", "made"]].sum().sort_index()
+    pending = decisions.loc[decisions["status"] == "PENDING", "size"].sum()
 
     oop_x, oop_y = [daily.index[0]], [0.0]
     peak, peak_day, net = 0.0, daily.index[0], 0.0
     for day, row in daily.iterrows():
-        before_returns = max(net + row["stake"], 0.0)
+        before_returns = max(net + row["size"], 0.0)
         if before_returns > peak:
             peak, peak_day = before_returns, day
-        net += row["stake"] - row["returned"]
+        net += row["size"] - row["returned"]
         oop_x += [day, day, day]
         oop_y += [oop_y[-1], before_returns, max(net, 0.0)]
     dates = [daily.index[0], *daily.index]
@@ -229,13 +229,19 @@ def plot_cash_flow(records: pd.DataFrame, path: Path) -> None:
     fig = Figure(figsize=(10, 5.5))
     ax = fig.subplots()
     ax.axhline(0, color=GRAY, linewidth=1)
-    ax.plot(oop_x, oop_y, color=BLUE, linewidth=2, label="Out of pocket (lost + pending - winnings, min £0)")
-    ax.step(dates, made, where="post", color=AQUA, linewidth=2, label="Money made (settled profit)")
+    ax.plot(
+        oop_x,
+        oop_y,
+        color=BLUE,
+        linewidth=2,
+        label="Own capital in play (losses + pending - returns, min £0)",
+    )
+    ax.step(dates, made, where="post", color=AQUA, linewidth=2, label="Net return (settled)")
     ax.plot(
         peak_day, peak, marker="o", markersize=8, color=BLUE, markeredgecolor="white", markeredgewidth=1.5
     )
     ax.annotate(
-        f"Most of your own money in play at once: £{peak:,.0f} ({peak_day:%d %b})",
+        f"Most of your own capital in play at once: £{peak:,.0f} ({peak_day:%d %b})",
         (peak_day, peak),
         xytext=(-10, 0),
         textcoords="offset points",
@@ -251,15 +257,15 @@ def plot_cash_flow(records: pd.DataFrame, path: Path) -> None:
     if abs(oop_y[-1] - made[-1]) < 0.08 * span:
         dy_oop, dy_made = (7, -7) if oop_y[-1] >= made[-1] else (-7, 7)
     sign = "+" if made[-1] >= 0 else "-"
-    _end_label(ax, oop_x[-1], oop_y[-1], f"£{oop_y[-1]:,.0f} out of pocket", BLUE, dy=dy_oop)
-    _end_label(ax, dates[-1], made[-1], f"{sign}£{abs(made[-1]):,.0f} made", AQUA, dy=dy_made)
+    _end_label(ax, oop_x[-1], oop_y[-1], f"£{oop_y[-1]:,.0f} of own capital in play", BLUE, dy=dy_oop)
+    _end_label(ax, dates[-1], made[-1], f"{sign}£{abs(made[-1]):,.0f} net return", AQUA, dy=dy_made)
 
-    ax.set_title(f"Cash flow, all markets: {len(bets)} bets, £{pending:,.0f} pending")
+    ax.set_title(f"Cash flow, all targets: {len(decisions)} decisions, £{pending:,.0f} pending")
     ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
     ax.set_xlabel("Date")
     ax.set_ylabel("£")
-    ax.legend(loc="upper left")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2, frameon=False)
     ax.grid(True, color=GRID, linewidth=1)
     ax.set_axisbelow(True)
     fig.autofmt_xdate()
@@ -267,7 +273,7 @@ def plot_cash_flow(records: pd.DataFrame, path: Path) -> None:
     _save(fig, path)
 
 
-CLV_SCOPE_NOTE = "Only bets with both an early and a closing price recorded, so fewer than the back-test."
+SCOPE_NOTE = "Only decisions with both an early and a closing price recorded, so fewer than the back-test."
 
 
 def _titled_layout(fig: Figure, title: str, note: str) -> None:
@@ -279,9 +285,9 @@ def _titled_layout(fig: Figure, title: str, note: str) -> None:
 
 
 def plot_roi_comparison(summary: pd.DataFrame, path: Path) -> None:
-    """Expected vs actual return on stake per market, with 95% intervals.
+    """Expected vs actual return on size per market, with 95% intervals.
 
-    A market is profitable when its whole expected-ROI interval sits right of
+    A target shows an advantage when its whole expected-ROI interval sits right of
     zero. The actual-ROI interval is much wider because results are noisy.
     """
     fig = Figure(figsize=(9, 1.6 + 1.2 * len(summary)))
@@ -292,7 +298,7 @@ def plot_roi_comparison(summary: pd.DataFrame, path: Path) -> None:
 
     series = (
         ("expected_roi", BLUE, -0.15, "Expected, valued at closing prices"),
-        ("actual_roi", ORANGE, 0.15, "Actual, from results so far"),
+        ("realised_roi", ORANGE, 0.15, "Realised, from outcomes so far"),
     )
     positions = np.arange(len(summary))
     for column, colour, offset, label in series:
@@ -325,11 +331,13 @@ def plot_roi_comparison(summary: pd.DataFrame, path: Path) -> None:
                     color=INK,
                 )
 
-    labels = [f"{row.market}\n{row.bets} bets: {row.verdict}" for row in summary.itertuples()]
+    labels = [f"{row.market}\n{row.decisions} decisions: {row.verdict}" for row in summary.itertuples()]
     ax.set_yticks(positions, labels)
     ax.invert_yaxis()
     ax.xaxis.set_major_formatter(lambda x, _: f"{x:+.0f}%")
-    ax.set_xlabel("Return on stake (dot) with 95% confidence interval (line)", color=MUTED, fontsize=9)
+    ax.set_xlabel(
+        "Return on amount committed (dot) with 95% confidence interval (line)", color=MUTED, fontsize=9
+    )
     ax.grid(axis="x", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
     for spine in ("top", "right", "left"):
@@ -343,13 +351,13 @@ def plot_roi_comparison(summary: pd.DataFrame, path: Path) -> None:
         ncol=2,
         labelcolor=INK,
     )
-    _titled_layout(fig, "Return on stake by market: expected at closing prices vs actual", CLV_SCOPE_NOTE)
+    _titled_layout(fig, "Return by target: expected at closing prices vs realised", SCOPE_NOTE)
     _save(fig, path)
 
 
-def plot_profit_over_time(bets: pd.DataFrame, path: Path) -> None:
-    """Cumulative expected and actual profit on settled bets, one panel per market."""
-    settled = bets[bets["status"].isin(["WIN", "LOSS"])]
+def plot_cumulative_return(decisions: pd.DataFrame, path: Path) -> None:
+    """Cumulative expected and actual gain on settled decisions, one panel per market."""
+    settled = decisions[decisions["status"].isin(["CORRECT", "INCORRECT"])]
     markets = [m for m in MARKETS if (settled["market"] == m).any()]
     if not markets:
         return
@@ -358,13 +366,13 @@ def plot_profit_over_time(bets: pd.DataFrame, path: Path) -> None:
     axes = np.atleast_1d(fig.subplots(1, len(markets), sharey=True))
     for ax, market in zip(axes, markets, strict=True):
         group = settled[settled["market"] == market]
-        # One step per match day, so same-day bets don't draw vertical spikes.
-        daily = group.groupby("date")[["expected_profit", "profit"]].sum().cumsum()
+        # One step per match day, so same-day decisions don't draw vertical spikes.
+        daily = group.groupby("date")[["expected_gain", "gain"]].sum().cumsum()
         dates = [daily.index[0] - pd.Timedelta(days=1), *daily.index]
-        expected = [0.0, *daily["expected_profit"]]
-        actual = [0.0, *daily["profit"]]
+        expected = [0.0, *daily["expected_gain"]]
+        actual = [0.0, *daily["gain"]]
         ax.step(dates, expected, where="post", color=BLUE, linewidth=2, label="Expected at closing prices")
-        ax.step(dates, actual, where="post", color=ORANGE, linewidth=2, label="Actual")
+        ax.step(dates, actual, where="post", color=ORANGE, linewidth=2, label="Realised")
 
         # Nudge the end labels apart if they would overlap.
         span = (max(expected + actual) - min(expected + actual)) or 1.0
@@ -378,7 +386,7 @@ def plot_profit_over_time(bets: pd.DataFrame, path: Path) -> None:
         ax.set_facecolor(SURFACE)
         ax.axhline(0, color=MUTED, linewidth=1)
         ax.set_title(
-            f"{MARKETS[market].label} ({len(group)} settled bets)", fontsize=10, color=INK, loc="left"
+            f"{MARKETS[market].label} ({len(group)} settled decisions)", fontsize=10, color=INK, loc="left"
         )
         ax.grid(True, color=GRID, linewidth=0.8)
         ax.set_axisbelow(True)
@@ -387,7 +395,7 @@ def plot_profit_over_time(bets: pd.DataFrame, path: Path) -> None:
         ax.tick_params(colors=MUTED, labelsize=9)
         for spine in ("top", "right"):
             ax.spines[spine].set_visible(False)
-    axes[0].set_ylabel("Cumulative profit (£)", color=MUTED, fontsize=9)
+    axes[0].set_ylabel("Cumulative return (£)", color=MUTED, fontsize=9)
     axes[0].legend(frameon=False, fontsize=9, loc="upper left", labelcolor=INK)
-    _titled_layout(fig, "Cumulative profit: expected at closing prices vs actual", CLV_SCOPE_NOTE)
+    _titled_layout(fig, "Cumulative return: expected at closing prices vs realised", SCOPE_NOTE)
     _save(fig, path)

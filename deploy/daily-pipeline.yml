@@ -1,6 +1,6 @@
 # Daily pipeline, run from a PRIVATE data repository.
 #
-# The private repository holds the contents of data/ (the odds history,
+# The private repository holds the contents of data/ (the price history,
 # results, model and decision log) plus this file at
 # .github/workflows/daily-pipeline.yml. Each run checks out that data and this
 # public code repository, runs the pipeline, and commits the updated data back,
@@ -90,7 +90,7 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: python -m corners run
 
-      # Runs even if the pipeline failed part-way, so captured odds are never lost.
+      # Runs even if the pipeline failed part-way, so captured prices are never lost.
       - name: Save the updated data
         if: always()
         working-directory: data
@@ -110,7 +110,7 @@ jobs:
           retention-days: 30
 
       # Only a fixed list of charts is published (see corners/publish.py). They show
-      # markets, dates and pounds, with no fixtures, odds or provider data. Each run
+      # markets, dates and pounds, with no fixtures, prices or provider data. Each run
       # replaces the previous charts with a single new commit on the `charts` branch,
       # so the repository doesn't accumulate a history of pictures and `main` is
       # never touched.

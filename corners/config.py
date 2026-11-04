@@ -23,11 +23,11 @@ LOG_DIR = PROJECT_ROOT / "logs"
 RAW_RESULTS_FILE = DATA_DIR / "raw_results.csv"
 FEATURES_FILE = DATA_DIR / "features.csv"
 TEAM_FORM_FILE = DATA_DIR / "team_form.csv"
-ODDS_HISTORY_FILE = DATA_DIR / "odds_history.csv"
+PRICE_HISTORY_FILE = DATA_DIR / "odds_history.csv"
 MODEL_FILE = DATA_DIR / "model_params.json"
 DECISION_LOG_FILE = DATA_DIR / "decision_log.csv"
 UNMATCHED_TEAMS_FILE = DATA_DIR / "unmatched_teams.csv"
-BET_ID_CACHE_FILE = DATA_DIR / "api_bet_ids.json"
+MARKET_ID_CACHE_FILE = DATA_DIR / "api_bet_ids.json"
 
 # ---------------------------------------------------------------------------
 # Leagues: our code -> (football-data.co.uk name, API-Football league id)
@@ -50,7 +50,7 @@ API_LEAGUE_ID_TO_CODE = {api_id: code for code, (_, api_id) in LEAGUES.items()}
 FIRST_SEASON = "1415"  # earliest season downloaded on a full rebuild
 
 # ---------------------------------------------------------------------------
-# Betting lines tracked per market
+# Over/under lines tracked per target
 # ---------------------------------------------------------------------------
 TOTAL_CORNER_LINES = [7.5, 8.5, 9.5, 10.5]
 HOME_CORNER_LINES = [4.5, 5.5, 6.5]  # centred on the historical home mean (~5.4)
@@ -65,7 +65,7 @@ API_REQUEST_PAUSE_SECONDS = 1.5  # stays under the free plan's per-minute limit
 API_MAX_RETRIES = 5
 DISCOVERY_DAYS_AHEAD = 30  # discovery stops earlier at the plan's date window
 DISCOVERY_DAYS_BACK = 14
-RESULTS_FALLBACK_QUOTA_RESERVE = 30  # requests kept back for odds fetching
+RESULTS_FALLBACK_QUOTA_RESERVE = 30  # requests kept back for price fetching
 RESULTS_FALLBACK_RESCAN_DAYS = 2
 
 # ---------------------------------------------------------------------------
@@ -78,29 +78,29 @@ MODEL_MAX_COUNT = 20  # corner counts above this share the top bucket
 REPORT_LINES = [7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5]
 
 # ---------------------------------------------------------------------------
-# Pricing and staking
+# Pricing and decision
 # ---------------------------------------------------------------------------
-PMF_MAX_K = 30  # count support used when fitting the bookmaker's ladder
+PMF_MAX_K = 30  # count support used when fitting the provider's ladder
 MARKET_ALPHA_PRIOR = 0.1  # dispersion used when fewer than 3 prices exist
 MARKET_MAX_ALPHA = 0.5
 RESULT_DATE_TOLERANCE_DAYS = 2
 
 
 @dataclass(frozen=True)
-class StakingConfig:
-    """Rules for turning a price and a probability into a stake."""
+class DecisionConfig:
+    """Rules for turning a price and a probability into a size."""
 
-    bankroll: float = 1000.0
+    capital: float = 1000.0
     ev_threshold: float = 0.05
     model_weight: float = 0.5  # weight on the model mean vs the market mean
     kelly_fraction: float = 0.25
     max_kelly_ev: float = 0.04  # EV is capped here before Kelly sizing
-    max_stake_pct: float = 0.10
-    min_odds: float = 1.0
-    max_odds: float = 3.0
+    max_size_pct: float = 0.10
+    min_price: float = 1.0
+    max_price: float = 3.0
 
 
-STAKING = StakingConfig()
+DECISION_CONFIG = DecisionConfig()
 
 
 def current_season_code(today: date | None = None) -> str:

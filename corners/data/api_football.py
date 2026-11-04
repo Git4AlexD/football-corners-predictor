@@ -1,8 +1,8 @@
 """Thin client for the API-Football v3 REST API (free plan).
 
 The free plan only exposes fixtures within a rolling window of roughly
-yesterday to tomorrow and has no historical odds, which is why the pipeline
-captures odds itself as fixtures come into view.
+yesterday to tomorrow and has no historical prices, which is why the pipeline
+captures prices itself as fixtures come into view.
 """
 
 from __future__ import annotations
@@ -20,18 +20,18 @@ from corners.config import (
     API_LEAGUE_ID_TO_CODE,
     API_MAX_RETRIES,
     API_REQUEST_PAUSE_SECONDS,
-    BET_ID_CACHE_FILE,
+    MARKET_ID_CACHE_FILE,
     api_key,
 )
 
 log = logging.getLogger(__name__)
 
-# Statuses worth fetching odds for: not started (early odds) and full time
-# (closing odds). Postponed, abandoned and in-play fixtures are skipped.
+# Statuses worth fetching prices for: not started (early price) and full time
+# (closing price). Postponed, abandoned and in-play fixtures are skipped.
 WANTED_STATUSES = {"NS", "FT"}
 
 # Market name as API-Football lists it -> substring fallback.
-_BET_NAMES = {
+_MARKET_NAMES = {
     "corners": ("corners over under", "corner"),
     "home_corners": ("home corners over/under", "home corner"),
     "away_corners": ("away corners over/under", "away corner"),
@@ -90,7 +90,7 @@ class ApiFootballClient:
             self.requests_remaining = int(remaining)
             log.debug("%s: %s requests left today", endpoint, remaining)
 
-        # Only page 1 is ever requested. Odds responses have never been
+        # Only page 1 is ever requested. Price responses have never been
         # paginated, but a silently truncated response would understate the
         # best available price, so make it loud if it ever happens.
         paging = payload.get("paging") or {}
@@ -106,29 +106,29 @@ class ApiFootballClient:
         log.warning("%s rate limited, retrying in %ss", endpoint, wait)
         time.sleep(wait)
 
-    def bet_ids(self) -> dict[str, int]:
-        """API-Football's bet-type ids for each tracked market (cached on disk)."""
+    def market_ids(self) -> dict[str, int]:
+        """API-Football's market ids for each tracked market (cached on disk)."""
         cached: dict[str, int] = {}
-        if BET_ID_CACHE_FILE.exists():
-            cached = json.loads(BET_ID_CACHE_FILE.read_text())
-        missing = [market for market in _BET_NAMES if market not in cached]
+        if MARKET_ID_CACHE_FILE.exists():
+            cached = json.loads(MARKET_ID_CACHE_FILE.read_text())
+        missing = [market for market in _MARKET_NAMES if market not in cached]
         if missing:
-            bets = self.get("odds/bets")
+            listed = self.get("odds/bets")  # the provider's name for its market list
             for market in missing:
-                exact, contains = _BET_NAMES[market]
-                names = [(b, (b.get("name") or "").strip().lower()) for b in bets]
+                exact, contains = _MARKET_NAMES[market]
+                names = [(b, (b.get("name") or "").strip().lower()) for b in listed]
                 match = next((b for b, n in names if n == exact), None) or next(
                     (b for b, n in names if contains in n), None
                 )
                 if match is None:
                     raise RuntimeError(f"No '{market}' market found in /odds/bets")
                 cached[market] = match["id"]
-            BET_ID_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            BET_ID_CACHE_FILE.write_text(json.dumps(cached))
-        return {market: cached[market] for market in _BET_NAMES}
+            MARKET_ID_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            MARKET_ID_CACHE_FILE.write_text(json.dumps(cached))
+        return {market: cached[market] for market in _MARKET_NAMES}
 
     def fixtures_on(self, date_str: str) -> list[dict[str, Any]]:
-        """Tracked-league fixtures on a date with a status worth fetching odds for."""
+        """Tracked-league fixtures on a date with a status worth fetching prices for."""
         fixtures = []
         for f in self.get("fixtures", {"date": date_str}):
             league = API_LEAGUE_ID_TO_CODE.get(f["league"]["id"])
@@ -147,24 +147,24 @@ class ApiFootballClient:
             )
         return fixtures
 
-    def best_odds(
+    def best_prices(
         self, fixture_id: int, markets: dict[str, tuple[int, list[float]]]
     ) -> dict[str, tuple[BestPrices, BestPrices]]:
-        """Best over/under price per line, and the bookmaker offering it.
+        """Best over/under price per line, and the provider offering it.
 
         One unfiltered ``/odds`` call returns every market for the fixture,
         which is four times cheaper than one call per market.
 
         Args:
             fixture_id: API-Football fixture id.
-            markets: ``{market: (bet_id, lines)}``.
+            markets: ``{market: (market_id, lines)}``.
 
         Returns:
-            ``{market: (prices, bookmakers)}`` where a missing price is 0.0
-            and a missing bookmaker is None.
+            ``{market: (prices, providers)}`` where a missing price is 0.0
+            and a missing provider is None.
         """
         response = self.get("odds", {"fixture": fixture_id})
-        market_by_bet = {bet_id: market for market, (bet_id, _) in markets.items()}
+        market_by_id = {market_id: market for market, (market_id, _) in markets.items()}
         prices = {
             m: {line: {"Over": 0.0, "Under": 0.0} for line in lines} for m, (_, lines) in markets.items()
         }
@@ -173,12 +173,12 @@ class ApiFootballClient:
         }
 
         for entry in response:
-            for bookmaker in entry.get("bookmakers", []):
-                for bet in bookmaker.get("bets", []):
-                    market = market_by_bet.get(bet.get("id"))
+            for provider in entry.get("bookmakers", []):  # the provider's field names
+                for listing in provider.get("bets", []):
+                    market = market_by_id.get(listing.get("id"))
                     if market is None:
                         continue
-                    for value in bet.get("values", []):
+                    for value in listing.get("values", []):
                         parts = str(value.get("value", "")).split()
                         if len(parts) != 2 or parts[0] not in ("Over", "Under"):
                             continue
@@ -189,6 +189,6 @@ class ApiFootballClient:
                         side = parts[0]
                         if line in prices[market] and odd > prices[market][line][side]:
                             prices[market][line][side] = odd
-                            books[market][line][side] = bookmaker.get("name")
+                            books[market][line][side] = provider.get("name")
 
         return {market: (prices[market], books[market]) for market in markets}

@@ -16,46 +16,46 @@ def quiet_logging(monkeypatch):
 
 
 @pytest.fixture
-def three_fixtures(trained, make_odds_row, make_history):
+def three_fixtures(trained, make_price_row, make_history):
     matches = trained.test_season().iloc[-30::10]
-    rows = [make_odds_row(m, fixture_id=500 + i, mu=7.5) for i, (_, m) in enumerate(matches.iterrows())]
+    rows = [make_price_row(m, fixture_id=500 + i, mu=7.5) for i, (_, m) in enumerate(matches.iterrows())]
     return make_history(rows)
 
 
-def test_stakes_lists_each_market_for_the_requested_dates(monkeypatch, capsys, trained, three_fixtures):
-    monkeypatch.setattr(cli, "load_odds_history", lambda: three_fixtures)
+def test_decisions_lists_each_market_for_the_requested_dates(monkeypatch, capsys, trained, three_fixtures):
+    monkeypatch.setattr(cli, "load_price_history", lambda: three_fixtures)
     monkeypatch.setattr(pipeline, "build_evaluator", lambda: trained.evaluator)
     kickoffs = three_fixtures["start_datetime"]
 
-    cli.main(["stakes", kickoffs.min().strftime("%Y-%m-%d"), kickoffs.max().strftime("%Y-%m-%d")])
+    cli.main(["decisions", kickoffs.min().strftime("%Y-%m-%d"), kickoffs.max().strftime("%Y-%m-%d")])
 
     output = capsys.readouterr().out
     for label in ("Total corners", "Home corners", "Away corners"):
         assert label in output
-    assert "bet(s)" in output
+    assert "selected," in output
     assert " v " in output  # fixtures are listed
 
 
-def test_stakes_for_a_date_with_no_fixtures(monkeypatch, capsys, three_fixtures):
-    monkeypatch.setattr(cli, "load_odds_history", lambda: three_fixtures)
-    cli.main(["stakes", "2030-01-01"])
-    assert "No fixtures in the odds history" in capsys.readouterr().out
+def test_decisions_for_a_date_with_no_fixtures(monkeypatch, capsys, three_fixtures):
+    monkeypatch.setattr(cli, "load_price_history", lambda: three_fixtures)
+    cli.main(["decisions", "2030-01-01"])
+    assert "No fixtures in the price history" in capsys.readouterr().out
 
 
 def test_each_command_calls_the_right_function(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "ApiFootballClient", lambda: "client")
-    monkeypatch.setattr(cli, "capture_odds", lambda client: calls.append(("odds", client)))
+    monkeypatch.setattr(cli, "capture_prices", lambda client: calls.append(("prices", client)))
     monkeypatch.setattr(
         cli, "update_results", lambda client, full_rebuild: calls.append(("results", client, full_rebuild))
     )
     monkeypatch.setattr(cli, "build_features", lambda: calls.append(("features",)))
     monkeypatch.setattr(pipeline, "train_if_needed", lambda force=False: calls.append(("train", force)))
     monkeypatch.setattr(pipeline, "track_results", lambda: calls.append(("track",)))
-    monkeypatch.setattr(pipeline, "evaluate_closing_line_value", lambda: calls.append(("clv",)))
+    monkeypatch.setattr(pipeline, "evaluate_against_closing_prices", lambda: calls.append(("evaluate",)))
 
     for command in (
-        ["odds"],
+        ["prices"],
         ["results"],
         ["results", "--full"],
         ["features"],
@@ -63,18 +63,18 @@ def test_each_command_calls_the_right_function(monkeypatch):
         ["train", "--force"],
     ):
         assert cli.main(command) == 0
-    for command in (["track"], ["-v", "clv"]):
+    for command in (["track"], ["-v", "evaluate"]):
         assert cli.main(command) == 0
 
     assert calls == [
-        ("odds", "client"),
+        ("prices", "client"),
         ("results", "client", False),
         ("results", "client", True),
         ("features",),
         ("train", False),
         ("train", True),
         ("track",),
-        ("clv",),
+        ("evaluate",),
     ]
 
 

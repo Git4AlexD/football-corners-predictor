@@ -1,21 +1,21 @@
-"""Is the strategy profitable? Measured with closing-line value (CLV).
+"""Do the forecasts beat the market? Evaluated against closing prices.
 
-Profit from a few hundred bets is mostly luck: whether a bet wins is close
-to a coin flip, so actual ROI has a margin of error of roughly +/-15%. A far
-more precise measure is what each bet was *worth*. The closing price, just
-before kickoff, is the market's most accurate estimate of the true
-probability, so each bet placed at early odds is valued at it:
+The realised outcome of a few hundred decisions is mostly luck: whether each one
+lands is close to a coin flip, so the realised return has a margin of error of
+roughly +/-15%. A far more precise measure is what each decision was *worth*.
+The closing price, just before kickoff, is the market's most accurate estimate of
+the true probability, so each decision taken at the early price is valued at it:
 
-    expected profit = stake x (early odds x fair closing probability - 1)
+    expected gain = size x (early price x fair closing probability - 1)
 
-Summed over bets, this is the strategy's expected profit, and divided by
-the amount staked, its expected return on stake (ROI). A strategy that
-consistently gets better prices than the fair closing price makes money in
-the long run, whatever its results so far.
+Summed over decisions, this is the expected gain, and divided by the amount
+committed, the expected return on that amount (ROI). Forecasts that consistently
+find better prices than the fair closing price carry real information, whatever
+their realised results so far.
 
-For every fixture with both an early and a closing odds snapshot, the
-staking engine's decision is replicated on the early odds, valued at the
-close, and settled against the actual result. Outputs go to results/clv/.
+For every fixture with both an early and a closing price snapshot, the decision
+engine's choice is replicated on the early price, valued at the close, and settled
+against the actual result. Outputs go to results/evaluation/.
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ import numpy as np
 import pandas as pd
 
 from corners.config import RESULTS_DIR
-from corners.data.odds_history import stage_ladder
-from corners.plots import plot_profit_over_time, plot_roi_comparison
+from corners.data.price_history import stage_ladder
+from corners.decisions import MARKETS, FixtureEvaluator
+from corners.plots import plot_cumulative_return, plot_roi_comparison
 from corners.pricing import fair_over_prob
-from corners.staking import MARKETS, FixtureEvaluator
 from corners.tracking import ResultBook, out_of_sample, settle
 
 log = logging.getLogger(__name__)
@@ -44,17 +44,17 @@ def _has_prices(ladder: dict) -> bool:
 
 
 def pick_records(evaluator: FixtureEvaluator, history: pd.DataFrame, results: ResultBook) -> pd.DataFrame:
-    """The engine's pick for every fixture and market with early and closing odds.
+    """The engine's pick for every fixture and market with early and closing price.
 
-    Every fixture is included, bet or not (``bet`` marks the ones that clear the
-    EV threshold), so the bets can be compared with the picks that were passed up.
+    Every fixture is included, decision or not (``selected`` marks the ones that clear the
+    EV threshold), so the selections can be compared with the picks that were passed up.
     """
     rows = []
     threshold = evaluator.config.ev_threshold
     for _, row in out_of_sample(history, evaluator.model.train_end_date).iterrows():
         for market, spec in MARKETS.items():
-            early = stage_ladder(row, spec.odds_key, "early")
-            closing = stage_ladder(row, spec.odds_key, "closing")
+            early = stage_ladder(row, spec.price_key, "early")
+            closing = stage_ladder(row, spec.price_key, "closing")
             if not (_has_prices(early) and _has_prices(closing)):
                 continue
             evaluation = evaluator.evaluate(row, market, ladder=early, ev_threshold=-np.inf)
@@ -67,8 +67,8 @@ def pick_records(evaluator: FixtureEvaluator, history: pd.DataFrame, results: Re
 
             over = d.side == "Over"
             p_close = p_close_over if over else 1 - p_close_over
-            is_bet = d.ev >= threshold
-            stake = d.stake if is_bet else 0.0
+            selected = d.ev >= threshold
+            size = d.size if selected else 0.0
             actual = results.actual(
                 evaluation.league,
                 evaluation.home_team,
@@ -76,7 +76,7 @@ def pick_records(evaluator: FixtureEvaluator, history: pd.DataFrame, results: Re
                 evaluation.fixture_date,
                 spec.actual_column,
             )
-            status, profit = settle(d.side, d.line, d.odds, stake, actual)
+            status, gain = settle(d.side, d.line, d.price, size, actual)
             rows.append(
                 {
                     "date": evaluation.fixture_date.normalize(),
@@ -85,23 +85,23 @@ def pick_records(evaluator: FixtureEvaluator, history: pd.DataFrame, results: Re
                     "home": evaluation.home,
                     "away": evaluation.away,
                     "selection": f"{d.side} {d.line}",
-                    "early_odds": d.odds,
-                    "closing_odds": closing[d.line][0 if over else 1],
+                    "early_price": d.price,
+                    "closing_price": closing[d.line][0 if over else 1],
                     "calc_ev": d.ev,
-                    "ev_at_close": d.odds * p_close - 1,
-                    "bet": is_bet,
-                    "stake": stake,
-                    "expected_profit": stake * (d.odds * p_close - 1),
+                    "ev_at_close": d.price * p_close - 1,
+                    "selected": selected,
+                    "size": size,
+                    "expected_gain": size * (d.price * p_close - 1),
                     "status": status,
                     "actual": actual,
-                    "profit": profit,
+                    "gain": gain,
                 }
             )
     return pd.DataFrame(rows)
 
 
 def _bootstrap_ratio(numerator: np.ndarray, denominator: np.ndarray) -> tuple[float, float]:
-    """95% bootstrap interval for sum(numerator) / sum(denominator) over bets."""
+    """95% bootstrap interval for sum(numerator) / sum(denominator) over decisions."""
     if len(numerator) < 2:
         return np.nan, np.nan
     rng = np.random.default_rng(0)
@@ -113,46 +113,46 @@ def _bootstrap_ratio(numerator: np.ndarray, denominator: np.ndarray) -> tuple[fl
 
 def _verdict(low: float, high: float) -> str:
     if low > 0:
-        return "profitable"
+        return "ahead of market"
     if high < 0:
-        return "losing"
+        return "behind market"
     return "not clear yet"
 
 
 def summarise(records: pd.DataFrame) -> pd.DataFrame:
-    """Expected and actual return on stake for each market's bets."""
+    """Expected and actual return on size for each market's decisions."""
     rows = []
     for market, spec in MARKETS.items():
-        bets = records[(records["market"] == market) & records["bet"]]
-        if bets.empty:
+        decisions = records[(records["market"] == market) & records["selected"]]
+        if decisions.empty:
             continue
-        stake = bets["stake"].to_numpy()
-        exp_low, exp_high = _bootstrap_ratio(bets["expected_profit"].to_numpy(), stake)
-        settled = bets[bets["status"].isin(["WIN", "LOSS"])]
-        act_low, act_high = _bootstrap_ratio(settled["profit"].to_numpy(), settled["stake"].to_numpy())
+        size = decisions["size"].to_numpy()
+        exp_low, exp_high = _bootstrap_ratio(decisions["expected_gain"].to_numpy(), size)
+        settled = decisions[decisions["status"].isin(["CORRECT", "INCORRECT"])]
+        act_low, act_high = _bootstrap_ratio(settled["gain"].to_numpy(), settled["size"].to_numpy())
         rows.append(
             {
                 "market": spec.label,
-                "bets": len(bets),
-                "staked": stake.sum(),
-                "expected_profit": bets["expected_profit"].sum(),
-                "expected_roi": bets["expected_profit"].sum() / stake.sum(),
+                "decisions": len(decisions),
+                "committed": size.sum(),
+                "expected_gain": decisions["expected_gain"].sum(),
+                "expected_roi": decisions["expected_gain"].sum() / size.sum(),
                 "expected_roi_low": exp_low,
                 "expected_roi_high": exp_high,
-                "beat_closing_price": (bets["ev_at_close"] > 0).mean(),
+                "beat_closing_price": (decisions["ev_at_close"] > 0).mean(),
                 "verdict": _verdict(exp_low, exp_high),
                 "settled": len(settled),
-                "actual_profit": settled["profit"].sum(),
-                "actual_roi": settled["profit"].sum() / settled["stake"].sum() if len(settled) else np.nan,
-                "actual_roi_low": act_low,
-                "actual_roi_high": act_high,
+                "realised_gain": settled["gain"].sum(),
+                "realised_roi": settled["gain"].sum() / settled["size"].sum() if len(settled) else np.nan,
+                "realised_roi_low": act_low,
+                "realised_roi_high": act_high,
             }
         )
     return pd.DataFrame(rows)
 
 
 def by_ev_band(records: pd.DataFrame) -> pd.DataFrame:
-    """Does a higher calculated EV mean a better price? Every pick, bet or not."""
+    """Does a higher calculated EV mean a better price? Every pick, decision or not."""
     df = records.assign(band=pd.cut(records["calc_ev"], EV_BANDS, labels=EV_BAND_LABELS, right=False))
     table = df.groupby(["market", "band"], observed=True).agg(
         picks=("calc_ev", "size"),
@@ -167,34 +167,38 @@ def _format_summary(summary: pd.DataFrame) -> str:
     def pct(value: float) -> str:
         return "n/a" if pd.isna(value) else f"{value:+.1%}"
 
-    lines = ["Is each market profitable? Bets placed at early odds, valued at the fair closing price."]
+    lines = [
+        "Do the forecasts beat the market? Decisions at the early price, valued at the fair closing price."
+    ]
     for row in summary.itertuples():
         lines += [
-            f"  {row.market}: {row.bets} bets, £{row.staked:,.2f} staked",
+            f"  {row.market}: {row.decisions} decisions, £{row.committed:,.2f} committed",
             f"    expected ROI at closing prices {pct(row.expected_roi)} "
             f"(95% CI {pct(row.expected_roi_low)} to {pct(row.expected_roi_high)}): {row.verdict.upper()}",
-            f"    beat the fair closing price on {row.beat_closing_price:.0%} of bets",
-            f"    actual ROI from {row.settled} settled bets {pct(row.actual_roi)} "
-            f"(95% CI {pct(row.actual_roi_low)} to {pct(row.actual_roi_high)})",
+            f"    beat the fair closing price on {row.beat_closing_price:.0%} of decisions",
+            f"    actual ROI from {row.settled} settled decisions {pct(row.realised_roi)} "
+            f"(95% CI {pct(row.realised_roi_low)} to {pct(row.realised_roi_high)})",
         ]
     return "\n".join(lines)
 
 
-def evaluate_clv(evaluator: FixtureEvaluator, history: pd.DataFrame, results: ResultBook) -> pd.DataFrame:
+def evaluate_closing_prices(
+    evaluator: FixtureEvaluator, history: pd.DataFrame, results: ResultBook
+) -> pd.DataFrame:
     """Run the evaluation, save its tables and charts, and log the summary."""
     records = pick_records(evaluator, history, results)
-    if records.empty or not records["bet"].any():
-        log.info("No bets with both early and closing odds yet")
+    if records.empty or not records["selected"].any():
+        log.info("No decisions with both early and closing prices yet")
         return pd.DataFrame()
 
     summary = summarise(records)
-    out_dir = RESULTS_DIR / "clv"
+    out_dir = RESULTS_DIR / "evaluation"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary.to_csv(out_dir / "summary.csv", index=False)
-    records.to_csv(out_dir / "picks.csv", index=False)
+    records.to_csv(out_dir / "selections.csv", index=False)
     by_ev_band(records).to_csv(out_dir / "by_ev_band.csv")
-    plot_roi_comparison(summary, out_dir / "expected_vs_actual_roi.png")
-    plot_profit_over_time(records[records["bet"]], out_dir / "profit_over_time.png")
+    plot_roi_comparison(summary, out_dir / "expected_vs_realised_return.png")
+    plot_cumulative_return(records[records["selected"]], out_dir / "cumulative_return.png")
 
     log.info("\n%s", _format_summary(summary))
     return summary

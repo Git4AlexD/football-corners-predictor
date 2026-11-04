@@ -1,7 +1,7 @@
 """The daily pipeline and its building blocks.
 
-Run order matters: odds are fetched first because a missed odds snapshot
-can never be recovered (the free API plan has no historical odds), while a
+Run order matters: price are fetched first because a missed price snapshot
+can never be recovered (the free API plan has no historical price), while a
 missed result can be picked up on any later run. Each step that fails falls
 back to the last good output on disk when one exists.
 """
@@ -23,19 +23,19 @@ from corners.config import (
     FEATURES_FILE,
     LEAGUE_NAME_TO_CODE,
     MODEL_FILE,
-    ODDS_HISTORY_FILE,
+    PRICE_HISTORY_FILE,
     PROJECT_ROOT,
     RAW_RESULTS_FILE,
     UNMATCHED_TEAMS_FILE,
 )
 from corners.data.api_football import ApiFootballClient
-from corners.data.odds_history import capture_odds, load_odds_history
+from corners.data.price_history import capture_prices, load_price_history
 from corners.data.results import update_results
 from corners.decision_log import grade_decision_log, log_upcoming_decisions
-from corners.evaluation import evaluate_clv
+from corners.decisions import FixtureEvaluator
+from corners.evaluation import evaluate_closing_prices
 from corners.features import FormBook, build_features, load_features, load_team_form
 from corners.model import TrainedModel, needs_retraining, train_models
-from corners.staking import FixtureEvaluator
 from corners.teams import build_team_lookup, prune_resolved, unmatched_teams
 from corners.tracking import ResultBook, track
 
@@ -77,20 +77,20 @@ def train_if_needed(force: bool = False) -> None:
 
 
 def log_decisions() -> None:
-    log_upcoming_decisions(build_evaluator(), load_odds_history())
+    log_upcoming_decisions(build_evaluator(), load_price_history())
 
 
 def track_results() -> None:
-    history = load_odds_history()
+    history = load_price_history()
     if history.empty:
-        raise RuntimeError(f"{ODDS_HISTORY_FILE} is empty; fetch odds first")
+        raise RuntimeError(f"{PRICE_HISTORY_FILE} is empty; fetch prices first")
     results = ResultBook.load()
     track(build_evaluator(), history, results)
     grade_decision_log(results)
 
 
-def evaluate_closing_line_value() -> None:
-    evaluate_clv(build_evaluator(), load_odds_history(), ResultBook.load())
+def evaluate_against_closing_prices() -> None:
+    evaluate_closing_prices(build_evaluator(), load_price_history(), ResultBook.load())
 
 
 def offline_steps(force_retrain: bool = False) -> list[Step]:
@@ -100,7 +100,7 @@ def offline_steps(force_retrain: bool = False) -> list[Step]:
         Step("Train model if needed", lambda: train_if_needed(force_retrain), MODEL_FILE),
         Step("Log upcoming decisions", log_decisions, fatal=False),
         Step("Back-test and grade", track_results, fatal=False),
-        Step("Evaluate profitability at closing prices", evaluate_closing_line_value, fatal=False),
+        Step("Evaluate against closing prices", evaluate_against_closing_prices, fatal=False),
     ]
 
 
@@ -114,7 +114,7 @@ def report_steps() -> list[Step]:
     return [
         Step("Build features", build_features, FEATURES_FILE),
         Step("Back-test and grade", track_results, fatal=False),
-        Step("Evaluate profitability at closing prices", evaluate_closing_line_value, fatal=False),
+        Step("Evaluate against closing prices", evaluate_against_closing_prices, fatal=False),
     ]
 
 
@@ -128,7 +128,7 @@ def daily_steps(force_retrain: bool = False) -> list[Step]:
         return client
 
     return [
-        Step("Capture odds", lambda: capture_odds(api()), ODDS_HISTORY_FILE, fatal=False),
+        Step("Capture prices", lambda: capture_prices(api()), PRICE_HISTORY_FILE, fatal=False),
         Step("Update results", lambda: update_results(api()), RAW_RESULTS_FILE),
         *offline_steps(force_retrain),
     ]
@@ -138,7 +138,7 @@ def daily_steps(force_retrain: bool = False) -> list[Step]:
 def _exclusive_run() -> Iterator[bool]:
     """Hold a lock file for the duration of a run; yields False if another run holds it.
 
-    Two runs at once would write the same files, including the odds history,
+    Two runs at once would write the same files, including the price history,
     which cannot be rebuilt if it is corrupted.
     """
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)

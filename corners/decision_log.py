@@ -13,7 +13,7 @@ import logging
 import pandas as pd
 
 from corners.config import DECISION_LOG_FILE, RESULTS_DIR
-from corners.staking import BET, MARKETS, NO_BET, FixtureEvaluator
+from corners.decisions import MARKETS, NOT_SELECTED, SELECTED, FixtureEvaluator
 from corners.tracking import ResultBook, format_summary, settle
 
 log = logging.getLogger(__name__)
@@ -31,18 +31,25 @@ COLUMNS = [
     "status",
     "side",
     "line",
-    "odds",
-    "bookmaker",
+    "price",
+    "provider",
     "ev",
-    "stake",
+    "size",
     "model_fingerprint",
 ]
+
+
+# Column names and status values used before the vocabulary was changed. A log written
+# with them is converted when it is read, and saved with the new names on the next write.
+_LEGACY_COLUMNS = {"stake": "size", "odds": "price", "bookmaker": "provider"}
+_LEGACY_STATUSES = {"BET": SELECTED, "NO BET": NOT_SELECTED}
 
 
 def load_decision_log() -> pd.DataFrame:
     if not DECISION_LOG_FILE.exists():
         return pd.DataFrame(columns=COLUMNS)
-    df = pd.read_csv(DECISION_LOG_FILE)
+    df = pd.read_csv(DECISION_LOG_FILE).rename(columns=_LEGACY_COLUMNS)
+    df["status"] = df["status"].replace(_LEGACY_STATUSES)
     df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True)
     return df
 
@@ -52,8 +59,8 @@ def log_upcoming_decisions(
 ) -> int:
     """Record a decision for each upcoming fixture and market not yet logged.
 
-    Only fixtures with an early odds snapshot are logged, and only once they
-    can be priced, so a fixture missing form or goals odds is retried later.
+    Only fixtures with an early price snapshot are logged, and only once they
+    can be priced, so a fixture missing form or goals price is retried later.
     Returns the number of new entries.
     """
     now = now or pd.Timestamp.now(tz="UTC")
@@ -67,7 +74,7 @@ def log_upcoming_decisions(
             if (row["fixture_id"], market) in logged:
                 continue
             evaluation = evaluator.evaluate(row, market)
-            if evaluation.status not in (BET, NO_BET):
+            if evaluation.status not in (SELECTED, NOT_SELECTED):
                 continue
             d = evaluation.decision
             new.append(
@@ -84,10 +91,10 @@ def log_upcoming_decisions(
                     "status": evaluation.status,
                     "side": d.side,
                     "line": d.line,
-                    "odds": d.odds,
-                    "bookmaker": evaluation.bookmaker,
+                    "price": d.price,
+                    "provider": evaluation.provider,
                     "ev": d.ev,
-                    "stake": d.stake,
+                    "size": d.size,
                     "model_fingerprint": evaluator.model.fingerprint,
                 }
             )
@@ -99,37 +106,39 @@ def log_upcoming_decisions(
         )
         DECISION_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         combined[COLUMNS].to_csv(DECISION_LOG_FILE, index=False)
-    bets = sum(entry["status"] == BET for entry in new)
-    log.info("Decision log: %d new entr%s (%d bets)", len(new), "y" if len(new) == 1 else "ies", bets)
+    decisions = sum(entry["status"] == SELECTED for entry in new)
+    log.info(
+        "Decision log: %d new entr%s (%d decisions)", len(new), "y" if len(new) == 1 else "ies", decisions
+    )
     return len(new)
 
 
 def grade_decision_log(results: ResultBook) -> pd.DataFrame:
-    """Settle logged bets against actual results and save the graded log."""
+    """Settle logged decisions against actual results and save the graded log."""
     df = load_decision_log()
-    bets = df[df["status"] == BET].copy()
-    if bets.empty:
-        log.info("Decision log: no logged bets yet")
-        return bets
+    decisions = df[df["status"] == SELECTED].copy()
+    if decisions.empty:
+        log.info("Decision log: no logged decisions yet")
+        return decisions
 
-    statuses, actuals, profits = [], [], []
-    for _, bet in bets.iterrows():
+    statuses, actuals, gains = [], [], []
+    for _, decision in decisions.iterrows():
         actual = results.actual(
-            bet["league"],
-            bet["home_team"],
-            bet["away_team"],
-            bet["kickoff"].tz_convert(None),
-            MARKETS[bet["market"]].actual_column,
+            decision["league"],
+            decision["home_team"],
+            decision["away_team"],
+            decision["kickoff"].tz_convert(None),
+            MARKETS[decision["market"]].actual_column,
         )
-        status, profit = settle(bet["side"], bet["line"], bet["odds"], bet["stake"], actual)
+        status, gain = settle(decision["side"], decision["line"], decision["price"], decision["size"], actual)
         statuses.append(status)
         actuals.append(actual)
-        profits.append(profit)
-    bets = bets.assign(
-        status=statuses, actual=actuals, profit=profits, date=bets["kickoff"].dt.tz_convert(None)
+        gains.append(gain)
+    decisions = decisions.assign(
+        status=statuses, actual=actuals, gain=gains, date=decisions["kickoff"].dt.tz_convert(None)
     )
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    bets.drop(columns=["date"]).to_csv(RESULTS_DIR / "logged_bets.csv", index=False)
-    log.info("\n%s", format_summary(bets, "Logged decisions (as recommended at the time)"))
-    return bets
+    decisions.drop(columns=["date"]).to_csv(RESULTS_DIR / "logged_decisions.csv", index=False)
+    log.info("\n%s", format_summary(decisions, "Logged decisions (as recommended at the time)"))
+    return decisions

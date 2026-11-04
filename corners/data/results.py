@@ -1,7 +1,7 @@
 """Completed match results and statistics.
 
 football-data.co.uk is the canonical source (one CSV per league and season,
-including pre-closing goals odds). When it is unreachable, recent results
+including pre-closing goals price). When it is unreachable, recent results
 are filled in from API-Football's fixture statistics so the pipeline stays
 current. football-data.co.uk rows replace fallback rows once published.
 """
@@ -52,10 +52,10 @@ STAT_COLUMNS = [
     "HR",
     "AR",
 ]
-# Pre-closing average over/under 2.5 goals odds (from 2019/20 onwards).
+# Pre-closing average over/under 2.5 goals price (from 2019/20 onwards).
 # Pre-closing rather than closing because that is what exists before kickoff.
-GOALS_ODDS_COLUMNS = ["Avg>2.5", "Avg<2.5"]
-_SOURCE_COLUMNS = ["Date", "HomeTeam", "AwayTeam", "FTR", "HTR", *STAT_COLUMNS, *GOALS_ODDS_COLUMNS]
+GOALS_PRICE_COLUMNS = ["Avg>2.5", "Avg<2.5"]
+_SOURCE_COLUMNS = ["Date", "HomeTeam", "AwayTeam", "FTR", "HTR", *STAT_COLUMNS, *GOALS_PRICE_COLUMNS]
 RESULT_COLUMNS = [
     "Date",
     "HomeTeam",
@@ -91,7 +91,7 @@ RESULT_COLUMNS = [
     "away_trailing_ht",
     "has_red_card",
     "total_fouls",
-    *GOALS_ODDS_COLUMNS,
+    *GOALS_PRICE_COLUMNS,
 ]
 # API-Football statistic name -> our column suffix (H*/A*).
 _API_STATS = {
@@ -138,7 +138,7 @@ def _download_season(season: str, league: str) -> pd.DataFrame | None:
     if not {"HC", "AC", "HomeTeam", "AwayTeam", "Date"}.issubset(df.columns):
         return None
 
-    # The files carry 100+ bookmaker columns; keep only what is used.
+    # The files carry 100+ provider columns; keep only what is used.
     df = df.reindex(columns=_SOURCE_COLUMNS)
     df["League"] = LEAGUES[league][0]
     df["Season"] = f"20{season[:2]}/20{season[2:]}"
@@ -157,7 +157,7 @@ def download_football_data(seasons: list[str]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame(columns=RESULT_COLUMNS)
     df = pd.concat(frames, ignore_index=True)
-    for column in STAT_COLUMNS + GOALS_ODDS_COLUMNS:
+    for column in STAT_COLUMNS + GOALS_PRICE_COLUMNS:
         df[column] = pd.to_numeric(df[column], errors="coerce")
     return add_derived_columns(df)[RESULT_COLUMNS]
 
@@ -212,7 +212,7 @@ def fetch_recent_via_api(results: pd.DataFrame, client: ApiFootballClient) -> pd
 
     Covers the gap from the latest stored date to today, always re-scanning
     the last few days because an interrupted run can leave a day half-filled.
-    Stops early to keep a reserve of the daily request quota for odds, which
+    Stops early to keep a reserve of the daily request quota for price, which
     unlike results cannot be fetched later. Team names are mapped to the
     spellings already in ``results`` so each club keeps one identity.
     """
@@ -266,7 +266,7 @@ def fetch_recent_via_api(results: pd.DataFrame, client: ApiFootballClient) -> pd
 def _check_quota(client: ApiFootballClient) -> None:
     remaining = client.requests_remaining
     if remaining is not None and remaining <= RESULTS_FALLBACK_QUOTA_RESERVE:
-        raise _QuotaExhausted(f"{remaining} requests left, kept in reserve for odds")
+        raise _QuotaExhausted(f"{remaining} requests left, kept in reserve for prices")
 
 
 def _fallback_row(

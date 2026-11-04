@@ -1,9 +1,9 @@
-"""From a fixture's odds to a staking decision.
+"""From a fixture's price to a decision decision.
 
 For each market the model's expected corners is blended with the mean
-implied by the bookmaker's whole over/under ladder. Every line and side is
+implied by the provider's whole over/under ladder. Every line and side is
 then priced from the blended negative-binomial distribution, and the single
-highest-EV selection is bet if its EV clears the threshold, sized by capped
+highest-EV selection is decision if its EV clears the threshold, sized by capped
 fractional Kelly.
 """
 
@@ -17,15 +17,15 @@ import pandas as pd
 
 from corners.config import (
     AWAY_CORNER_LINES,
+    DECISION_CONFIG,
     HOME_CORNER_LINES,
-    STAKING,
     TOTAL_CORNER_LINES,
-    StakingConfig,
+    DecisionConfig,
 )
-from corners.data.odds_history import betting_bookmakers, betting_ladder, market_over25_prob
+from corners.data.price_history import decision_ladder, decision_providers, market_over25_prob
 from corners.features import FormBook
 from corners.model import TrainedModel
-from corners.pricing import OddsLadder, fit_market_ladder, is_valid_price_pair, nb_pmf
+from corners.pricing import PriceLadder, fit_market_ladder, is_valid_price_pair, nb_pmf
 from corners.teams import TeamLookup, log_unmatched_team, match_team
 
 log = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 class Market:
     key: str
     label: str
-    odds_key: str  # column key in the odds history
+    price_key: str  # column key in the price history
     lines: list[float]
     actual_column: str  # result column the market settles on
 
@@ -49,72 +49,72 @@ MARKETS = {
 # Statuses for fixtures that could not be priced.
 NO_TEAM_MATCH = "NO TEAM MATCH"  # a name matched nothing; may need an alias
 TEAM_TOO_NEW = "TEAM TOO NEW"  # a known team without enough history yet
-NO_DATA = "NO DATA"  # stale form or missing goals odds
-BET, NO_BET = "BET", "NO BET"
+NO_DATA = "NO DATA"  # stale form or missing goals price
+SELECTED, NOT_SELECTED = "SELECTED", "NOT SELECTED"
 
 
 @dataclass(frozen=True)
 class Decision:
-    """The best selection for one market, whether or not it is bet."""
+    """The best selection for one market, whether or not it is decision."""
 
-    is_bet: bool
+    selected: bool
     side: str | None = None
     line: float | None = None
-    odds: float = 0.0
+    price: float = 0.0
     ev: float | None = None  # None when the ladder had no usable price
-    stake: float = 0.0
-    stake_pct: float = 0.0
+    size: float = 0.0
+    size_pct: float = 0.0
 
 
-def kelly_stake(
-    ev: float, odds: float, bankroll: float, config: StakingConfig = STAKING
+def kelly_size(
+    ev: float, price: float, capital: float, config: DecisionConfig = DECISION_CONFIG
 ) -> tuple[float, float]:
-    """Capped fractional-Kelly stake as ``(amount, percent of bankroll)``.
+    """Capped fractional-Kelly size as ``(amount, percent of capital)``.
 
-    EV is capped before sizing, and the stake is capped as a share of the
-    bankroll, because at short odds Kelly can still ask for a large stake.
+    EV is capped before sizing, and the size is capped as a share of the
+    capital, because at short price Kelly can still ask for a large size.
     """
-    if ev < config.ev_threshold or odds <= 1.0:
+    if ev < config.ev_threshold or price <= 1.0:
         return 0.0, 0.0
-    kelly = config.kelly_fraction * (min(ev, config.max_kelly_ev) / (odds - 1.0))
-    fraction = max(0.0, min(kelly, config.max_stake_pct))
-    return round(bankroll * fraction, 2), round(fraction * 100, 2)
+    kelly = config.kelly_fraction * (min(ev, config.max_kelly_ev) / (price - 1.0))
+    fraction = max(0.0, min(kelly, config.max_size_pct))
+    return round(capital * fraction, 2), round(fraction * 100, 2)
 
 
-def decide_stake(
-    ladder: OddsLadder,
+def decide_selection(
+    ladder: PriceLadder,
     mu: float,
     alpha: float,
     lines: list[float],
     max_count: int,
-    bankroll: float,
-    config: StakingConfig = STAKING,
+    capital: float,
+    config: DecisionConfig = DECISION_CONFIG,
 ) -> Decision:
     """Price every line and side in the ladder and pick the highest EV."""
     pmf = nb_pmf(mu, alpha, max_count + 1)
     counts = np.arange(max_count + 1)
-    best: tuple[float, str, float, float] | None = None  # (ev, side, line, odds)
+    best: tuple[float, str, float, float] | None = None  # (ev, side, line, price)
 
     for line in lines:
         over, under = ladder[line]
         if not is_valid_price_pair(over, under):
             continue
-        for side, odds, prob in (
+        for side, price, prob in (
             ("Over", over, pmf[counts > line].sum()),
             ("Under", under, pmf[counts < line].sum()),
         ):
-            if config.min_odds <= odds <= config.max_odds:
-                ev = float(prob * odds - 1.0)
+            if config.min_price <= price <= config.max_price:
+                ev = float(prob * price - 1.0)
                 if best is None or ev > best[0]:
-                    best = (ev, side, line, odds)
+                    best = (ev, side, line, price)
 
     if best is None:
-        return Decision(is_bet=False)
-    ev, side, line, odds = best
+        return Decision(selected=False)
+    ev, side, line, price = best
     if ev < config.ev_threshold:
-        return Decision(is_bet=False, side=side, line=line, odds=odds, ev=ev)
-    stake, pct = kelly_stake(ev, odds, bankroll, config)
-    return Decision(is_bet=True, side=side, line=line, odds=odds, ev=ev, stake=stake, stake_pct=pct)
+        return Decision(selected=False, side=side, line=line, price=price, ev=ev)
+    size, pct = kelly_size(ev, price, capital, config)
+    return Decision(selected=True, side=side, line=line, price=price, ev=ev, size=size, size_pct=pct)
 
 
 @dataclass(frozen=True)
@@ -124,14 +124,14 @@ class Evaluation:
     fixture_id: int
     league: str
     kickoff: pd.Timestamp
-    home: str  # odds-feed names
+    home: str  # price-feed names
     away: str
     market: str
     status: str
     home_team: str | None = None  # dataset names
     away_team: str | None = None
     decision: Decision | None = None
-    bookmaker: str | None = None
+    provider: str | None = None
     model_mu: float | None = None
     blended_mu: float | None = None
     alpha: float | None = None
@@ -142,7 +142,7 @@ class Evaluation:
 
 
 class FixtureEvaluator:
-    """Applies the model and staking rules to rows of the odds history."""
+    """Applies the model and decision rules to rows of the price history."""
 
     def __init__(
         self,
@@ -150,7 +150,7 @@ class FixtureEvaluator:
         form: FormBook,
         lookup: TeamLookup,
         broad_lookup: TeamLookup | None = None,
-        config: StakingConfig = STAKING,
+        config: DecisionConfig = DECISION_CONFIG,
     ) -> None:
         self.model = model
         self.form = form
@@ -163,16 +163,16 @@ class FixtureEvaluator:
         self,
         row: pd.Series,
         market: str,
-        bankroll: float | None = None,
-        ladder: OddsLadder | None = None,
+        capital: float | None = None,
+        ladder: PriceLadder | None = None,
         ev_threshold: float | None = None,
     ) -> Evaluation:
-        """Decide what to bet on one fixture in one market.
+        """Decide what to decision on one fixture in one market.
 
         Args:
-            row: A row of the odds history.
+            row: A row of the price history.
             market: A key of ``MARKETS``.
-            bankroll: Bankroll to size the stake against (default: config).
+            capital: Capital to size the size against (default: config).
             ladder: Prices to use instead of the usual early-then-closing ladder.
             ev_threshold: Override the EV threshold, e.g. ``-inf`` to always pick.
         """
@@ -206,7 +206,7 @@ class FixtureEvaluator:
             match_features["mkt_over25_prob"] = prob
         model_mu = model.predict(home_form, away_form, base.league, match_features)
 
-        ladder = ladder if ladder is not None else betting_ladder(row, spec.odds_key)
+        ladder = ladder if ladder is not None else decision_ladder(row, spec.price_key)
         market_mu, market_alpha = self._fit_ladder(ladder)
         if market_mu is not None:
             w = self.config.model_weight
@@ -216,30 +216,30 @@ class FixtureEvaluator:
             mu, alpha = model_mu, model.alpha
 
         config = self.config if ev_threshold is None else replace(self.config, ev_threshold=ev_threshold)
-        decision = decide_stake(
+        decision = decide_selection(
             ladder,
             mu,
             alpha,
             spec.lines,
             self.model.max_count,
-            bankroll if bankroll is not None else config.bankroll,
+            capital if capital is not None else config.capital,
             config,
         )
-        bookmaker = None
-        if decision.is_bet:
-            over_book, under_book = betting_bookmakers(row, spec.odds_key).get(decision.line, (None, None))
-            bookmaker = over_book if decision.side == "Over" else under_book
+        provider = None
+        if decision.selected:
+            over_book, under_book = decision_providers(row, spec.price_key).get(decision.line, (None, None))
+            provider = over_book if decision.side == "Over" else under_book
         return replace(
             base,
-            status=BET if decision.is_bet else NO_BET,
+            status=SELECTED if decision.selected else NOT_SELECTED,
             decision=decision,
-            bookmaker=bookmaker,
+            provider=provider,
             model_mu=model_mu,
             blended_mu=mu,
             alpha=alpha,
         )
 
-    def _fit_ladder(self, ladder: OddsLadder) -> tuple[float | None, float | None]:
+    def _fit_ladder(self, ladder: PriceLadder) -> tuple[float | None, float | None]:
         key = tuple(sorted((line, over, under) for line, (over, under) in ladder.items()))
         if key not in self._ladder_fits:
             self._ladder_fits[key] = fit_market_ladder(ladder)

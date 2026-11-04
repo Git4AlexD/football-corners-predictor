@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from corners.config import StakingConfig, api_key, current_season_code, season_codes
+from corners.config import DecisionConfig, api_key, current_season_code, season_codes
 from corners.log import configure_logging
 
 
@@ -30,7 +30,7 @@ def test_season_codes_form_a_continuous_range():
 
 def test_the_staking_rules_cannot_be_changed_after_creation():
     with pytest.raises(dataclasses.FrozenInstanceError):
-        StakingConfig().bankroll = 5
+        DecisionConfig().capital = 5
 
 
 @pytest.fixture

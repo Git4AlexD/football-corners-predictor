@@ -7,9 +7,9 @@ from corners.tracking import ResultBook, out_of_sample, settle
 @pytest.mark.parametrize(
     ("side", "actual", "expected"),
     [
-        ("Over", 11, ("WIN", 10.0)),
-        ("Over", 9, ("LOSS", -10.0)),
-        ("Under", 9, ("WIN", 10.0)),
+        ("Over", 11, ("CORRECT", 10.0)),
+        ("Over", 9, ("INCORRECT", -10.0)),
+        ("Under", 9, ("CORRECT", 10.0)),
         ("Over", None, ("PENDING", 0.0)),
     ],
 )

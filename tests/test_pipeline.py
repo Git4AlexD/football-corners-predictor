@@ -7,10 +7,10 @@ import time
 import pytest
 
 from corners import pipeline
+from corners.decisions import FixtureEvaluator
 from corners.features import build_features
 from corners.model import needs_retraining, train_models
 from corners.pipeline import Step, run_steps
-from corners.staking import FixtureEvaluator
 from corners.teams import log_unmatched_team
 
 
@@ -27,11 +27,11 @@ def project(raw_results, redirect_paths, tmp_path_factory):
 
 
 @pytest.fixture
-def odds_history(project, trained, make_odds_row, make_history):
-    """An odds history for test-season fixtures, saved where the pipeline looks for it."""
+def price_history(project, trained, make_price_row, make_history):
+    """An price history for test-season fixtures, saved where the pipeline looks for it."""
     matches = trained.test_season().iloc[::12].head(10)
     rows = [
-        make_odds_row(m, fixture_id=400 + i, mu=7.5, closing_mu=7.0)
+        make_price_row(m, fixture_id=400 + i, mu=7.5, closing_mu=7.0)
         for i, (_, m) in enumerate(matches.iterrows())
     ]
     path = project / "data" / "odds_history.csv"
@@ -68,28 +68,28 @@ def test_the_evaluator_is_built_from_the_stored_files(project):
 # ---------------------------------------------------------------------------
 # Reporting steps
 # ---------------------------------------------------------------------------
-def test_tracking_needs_an_odds_history(project):
-    with pytest.raises(RuntimeError, match="fetch odds first"):
+def test_tracking_needs_a_price_history(project):
+    with pytest.raises(RuntimeError, match="fetch prices first"):
         pipeline.track_results()
 
 
-def test_tracking_writes_the_back_test(project, odds_history):
+def test_tracking_writes_the_back_test(project, price_history):
     pipeline.track_results()
     for mode in ("flat", "compounding"):
-        assert (project / "results" / mode / "bets.csv").exists()
+        assert (project / "results" / mode / "decisions.csv").exists()
 
 
-def test_the_profitability_evaluation_writes_its_summary(project, odds_history):
-    pipeline.evaluate_closing_line_value()
-    assert (project / "results" / "clv" / "summary.csv").exists()
+def test_the_closing_price_evaluation_writes_its_summary(project, price_history):
+    pipeline.evaluate_against_closing_prices()
+    assert (project / "results" / "evaluation" / "summary.csv").exists()
 
 
-def test_logging_decisions_skips_fixtures_that_have_already_started(project, odds_history):
+def test_logging_decisions_skips_fixtures_that_have_already_started(project, price_history):
     pipeline.log_decisions()  # every fixture in the history is in the past
     assert not (project / "data" / "decision_log.csv").exists()
 
 
-def test_the_offline_and_report_runs_complete(project, odds_history):
+def test_the_offline_and_report_runs_complete(project, price_history):
     assert run_steps(pipeline.offline_steps()) == 0
     assert run_steps(pipeline.report_steps()) == 0
 
@@ -101,15 +101,15 @@ def test_the_steps_run_in_the_documented_order():
         "Train model if needed",
         "Log upcoming decisions",
         "Back-test and grade",
-        "Evaluate profitability at closing prices",
+        "Evaluate against closing prices",
     ]
     daily = [step.name for step in pipeline.daily_steps()]
-    assert daily[:2] == ["Capture odds", "Update results"]  # odds first: they can't be recovered later
+    assert daily[:2] == ["Capture prices", "Update results"]  # prices first: they can't be recovered later
     assert daily[2:] == offline
     assert [step.name for step in pipeline.report_steps()] == [
         "Build features",
         "Back-test and grade",
-        "Evaluate profitability at closing prices",
+        "Evaluate against closing prices",
     ]
 
 

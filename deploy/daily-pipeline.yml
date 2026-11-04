@@ -19,8 +19,12 @@ name: Daily pipeline
 
 on:
   schedule:
-    - cron: "0 8 * * *"
-      timezone: "Europe/London" # 8am UK time all year, including when the clocks change
+    # Scheduled in UTC at both candidate times; the `gate` job lets through the one
+    # that falls at 8am UK time (07:05 UTC in summer, 08:05 UTC in winter). Minute 5
+    # rather than 0, because runs due exactly on the hour are the ones GitHub drops
+    # when it is busy.
+    - cron: "5 7 * * *"
+    - cron: "5 8 * * *"
   workflow_dispatch: # allows a manual run from the Actions tab
 
 permissions:
@@ -34,7 +38,24 @@ env:
   CODE_REPOSITORY: ${{ github.repository_owner }}/football-corners-predictor
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - id: check
+        run: |
+          hour=$(TZ=Europe/London date +%H)
+          if [ "$GITHUB_EVENT_NAME" != "schedule" ] || [ "$hour" = "08" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "It is ${hour}:xx in the UK, not 08:xx, so this scheduled run is skipped."
+          fi
+
   run:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
